@@ -1,0 +1,19 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Temporary files
+*.local
+public/uploads
+
+# Logs
+*.log
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
