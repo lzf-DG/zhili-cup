@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pre大师 - 录音工具</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #fff;
+      padding: 20px;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      text-align: center;
+      color: #FFD54F;
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+    
+    .subtitle {
+      text-align: center;
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+    
+    .script-card {
+      background: rgba(0,0,0,0.3);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255,213,79,0.2);
+    }
+    
+    .script-title {
+      color: #FFD54F;
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .script-number {
+      background: rgba(255,213,79,0.2);
+      color: #FFD54F;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+    
+    .script-text {
+      color: rgba(255,255,255,0.85);
+      font-size: 14px;
+      line-height: 1.8;
+      margin-bottom: 15px;
+      padding: 12px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 8px;
+      border-left: 3px solid #FFD54F;
+    }
+    
+    .script-duration {
+      color: rgba(255,255,255,0.5);
+      font-size: 12px;
+      margin-bottom: 15px;
+    }
+    
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .record-btn {
+      padding: 10px 24px;
+      border: none;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .record-btn.start {
+      background: linear-gradient(135deg, #FFD54F, #FF8F00);
+      color: #1a1a2e;
+    }
+    
+    .record-btn.stop {
+      background: linear-gradient(135deg, #FF5252, #D32F2F);
+      color: #fff;
+    }
+    
+    .record-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .timer {
+      color: rgba(255,255,255,0.7);
+      font-size: 14px;
+      font-family: monospace;
+    }
+    
+    .audio-player {
+      margin-top: 10px;
+      width: 100%;
+    }
+    
+    .download-btn {
+      padding: 8px 16px;
+      background: rgba(102,187,106,0.2);
+      border: 1px solid #66BB6A;
+      color: #66BB6A;
+      border-radius: 16px;
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+      margin-top: 10px;
+    }
+    
+    .download-btn:hover {
+      background: rgba(102,187,106,0.3);
+    }
+    
+    .status {
+      color: rgba(255,255,255,0.5);
+      font-size: 12px;
+      margin-left: 10px;
+    }
+    
+    .recording-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #FF5252;
+      animation: blink 1s infinite;
+      margin-right: 8px;
+    }
+    
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    
+    .tips {
+      background: rgba(255,213,79,0.1);
+      border: 1px solid rgba(255,213,79,0.3);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 30px;
+    }
+    
+    .tips h3 {
+      color: #FFD54F;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    
+    .tips ul {
+      color: rgba(255,255,255,0.7);
+      font-size: 13px;
+      padding-left: 20px;
+    }
+    
+    .tips li {
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎙️ Pre大师 · 录音工具</h1>
+    <p class="subtitle">录制测试音频用于答辩模拟</p>
+    
+    <div class="tips">
+      <h3>💡 使用提示</h3>
+      <ul>
+        <li>点击"开始录音"后朗读脚本内容</li>
+        <li>完成后点击"停止录音"，可预览和下载</li>
+        <li>录制的音频可保存到 <code>public/assets/audio/</code> 目录</li>
+        <li>建议使用 Chrome 或 Edge 浏览器</li>
+      </ul>
+    </div>
+    
+    <div id="scripts-container"></div>
+  </div>
+
+  <script>
+    const scripts = [
+      {
+        id: 'opening',
+        title: '开场白（对应第1页PPT）',
+        text: '各位评委老师好，我是张三，今天汇报的题目是《基于深度学习的图像识别研究》。我的指导教师是李教授。下面我将从研究背景、方法、实验结果和总结展望四个方面进行汇报。',
+        duration: '约15秒',
+        filename: 'opening.mp3'
+      },
+      {
+        id: 'answer1',
+        title: '回答王教授问题1（研究背景）',
+        text: '好的，王教授。我将从四个方面展开汇报。首先是研究背景：图像识别是计算机视觉的核心任务，传统方法依赖手工特征提取，泛化能力有限。而深度学习通过端到端学习自动提取特征，CNN和Transformer等模型取得了突破性进展。接下来我将详细介绍我们的研究方法。',
+        duration: '约20秒',
+        filename: 'answer1-wang.mp3'
+      },
+      {
+        id: 'answer2',
+        title: '回答王教授问题2（传统方法局限性）',
+        text: '好的，王教授。传统方法主要有三个局限性：第一，特征工程依赖专家经验，不同任务需要设计不同的特征提取器，成本高且难以复用；第二，对复杂场景的适应能力弱，比如光照变化、遮挡等情况会导致性能急剧下降；第三，特征表达能力有限，难以捕捉高层语义信息。而深度学习的优势在于能够自动学习多层次的特征表示，从低级边缘到高级语义，泛化能力更强。',
+        duration: '约30秒',
+        filename: 'answer2-wang.mp3'
+      },
+      {
+        id: 'answer3',
+        title: '回答李教授问题3（Attention机制）',
+        text: '谢谢李教授的问题。在我们的模型中，Attention机制主要用于两个方面：第一，通道注意力：通过SE模块对特征图的每个通道进行权重学习，让模型关注更重要的特征通道；第二，空间注意力：通过空间注意力模块定位图像中的关键区域，抑制背景噪声的干扰。具体来说，我们在ResNet-50的每个残差块后都加入了CBAM模块，这样可以在不显著增加计算量的情况下提升特征表达能力。实验表明，加入Attention后Top-1准确率提升了3.2%。',
+        duration: '约35秒',
+        filename: 'answer3-li.mp3'
+      },
+      {
+        id: 'answer4',
+        title: '回答李教授问题4（迁移学习策略）',
+        text: '我们使用的是在ImageNet-1K上预训练的ResNet-50模型。微调策略分为两个阶段：第一阶段，冻结 backbone 的前三个stage，只训练最后一个stage和分类头，学习率设为1e-3，训练10个epoch；第二阶段，解冻所有层，使用余弦退火学习率从1e-4降到1e-6，再训练20个epoch。这种渐进式微调策略可以有效避免灾难性遗忘，同时让模型更好地适应目标任务。',
+        duration: '约30秒',
+        filename: 'answer4-li.mp3'
+      },
+      {
+        id: 'answer5',
+        title: '回答张同学问题5（与ViT对比）',
+        text: '谢谢张同学的问题。我们确实和ViT进行了对比。在相同的训练条件下，ViT-B/16的Top-1准确率是93.8%，而我们的方法是94.7%，提升了0.9个百分点。同时，我们的模型参数量是25.6M，而ViT-B/16是86.6M，推理速度也更快（45ms vs 78ms）。这说明我们的方法在保持高性能的同时，具有更好的效率优势。当然，ViT在大规模数据上有更好的表现，这也是我们未来多模态融合方向可以考虑的。',
+        duration: '约30秒',
+        filename: 'answer5-zhang.mp3'
+      },
+      {
+        id: 'answer6',
+        title: '回答张同学问题6（改进方向）',
+        text: '这是个很好的问题。如果重新做，我会在三个方面改进：第一，数据方面：目前自建数据集只有10万张，规模偏小，我会尝试收集更多数据或使用更强的数据增强方法；第二，模型方面：可以考虑引入自监督学习进行预训练，减少对标注数据的依赖；第三，应用方面：目前只在静态图像上测试，未来可以扩展到视频序列，加入时序建模能力。总的来说，这个研究还有很大的提升空间。',
+        duration: '约25秒',
+        filename: 'answer6-zhang.mp3'
+      }
+    ];
+
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let currentRecordingId = null;
+    let timerInterval = null;
+    let seconds = 0;
+
+    function createScriptCard(script, index) {
+      return `
+        <div class="script-card" id="card-${script.id}">
+          <div class="script-title">
+            <span class="script-number">${index + 1}</span>
+            ${script.title}
+          </div>
+          <div class="script-text">${script.text}</div>
+          <div class="script-duration">⏱️ ${script.duration}</div>
+          <div class="controls">
+            <button class="record-btn start" id="btn-${script.id}" onclick="toggleRecord('${script.id}')">
+              ️ 开始录音
+            </button>
+            <span class="timer" id="timer-${script.id}">00:00</span>
+            <span class="status" id="status-${script.id}"></span>
+          </div>
+          <audio class="audio-player" id="audio-${script.id}" controls style="display:none;"></audio>
+          <a class="download-btn" id="download-${script.id}" style="display:none;" download="${script.filename}">
+            ⬇️ 下载音频
+          </a>
+        </div>
+      `;
+    }
+
+    function renderScripts() {
+      const container = document.getElementById('scripts-container');
+      container.innerHTML = scripts.map((s, i) => createScriptCard(s, i)).join('');
+    }
+
+    async function toggleRecord(id) {
+      const btn = document.getElementById(`btn-${id}`);
+      const timer = document.getElementById(`timer-${id}`);
+      const status = document.getElementById(`status-${id}`);
+      const audio = document.getElementById(`audio-${id}`);
+      const download = document.getElementById(`download-${id}`);
+
+      if (mediaRecorder && mediaRecorder.state === 'recording' && currentRecordingId === id) {
+        // 停止录音
+        mediaRecorder.stop();
+        clearInterval(timerInterval);
+        btn.textContent = '🎙️ 开始录音';
+        btn.className = 'record-btn start';
+        status.innerHTML = '';
+        currentRecordingId = null;
+      } else {
+        // 停止之前的录音（如果有）
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+          mediaRecorder.stop();
+          clearInterval(timerInterval);
+          if (currentRecordingId) {
+            const prevBtn = document.getElementById(`btn-${currentRecordingId}`);
+            const prevTimer = document.getElementById(`timer-${currentRecordingId}`);
+            const prevStatus = document.getElementById(`status-${currentRecordingId}`);
+            prevBtn.textContent = '🎙️ 开始录音';
+            prevBtn.className = 'record-btn start';
+            prevTimer.textContent = '00:00';
+            prevStatus.innerHTML = '';
+          }
+        }
+
+        // 开始新录音
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+          currentRecordingId = id;
+
+          mediaRecorder.ondataavailable = (e) => {
+            audioChunks.push(e.data);
+          };
+
+          mediaRecorder.onstop = () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            audio.src = audioUrl;
+            audio.style.display = 'block';
+            download.href = audioUrl;
+            download.style.display = 'inline-block';
+            status.textContent = '✅ 录音完成';
+            
+            // 停止所有音轨
+            stream.getTracks().forEach(track => track.stop());
+          };
+
+          mediaRecorder.start();
+          btn.textContent = '⏹️ 停止录音';
+          btn.className = 'record-btn stop';
+          status.innerHTML = '<span class="recording-indicator"></span>录音中...';
+          
+          // 启动计时器
+          seconds = 0;
+          timer.textContent = '00:00';
+          timerInterval = setInterval(() => {
+            seconds++;
+            const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+            const secs = (seconds % 60).toString().padStart(2, '0');
+            timer.textContent = `${mins}:${secs}`;
+          }, 1000);
+        } catch (err) {
+          status.textContent = '❌ 无法访问麦克风';
+          console.error(err);
+        }
+      }
+    }
+
+    // 初始化
+    renderScripts();
+  </script>
+</body>
+</html>

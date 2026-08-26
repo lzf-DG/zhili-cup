@@ -1,0 +1,102 @@
+/* ===== Pre大师·沉浸版 全局样式 ===== */
+
+:root {
+  --color-warm-white: #FFF3E0;
+  --color-deep-blue: #1A237E;
+  --color-accent-gold: #FFD54F;
+  --color-accent-orange: #FF8F00;
+  --color-text-primary: #1a1a2e;
+  --color-text-secondary: #757575;
+  --color-glass-bg: rgba(255, 243, 224, 0.85);
+  --color-glass-border: rgba(255, 213, 79, 0.3);
+  --color-judge-bubble: rgba(26, 35, 126, 0.9);
+  --color-user-bubble: rgba(255, 179, 0, 0.9);
+  --font-main: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-main);
+  color: var(--color-text-primary);
+}
+
+body {
+  background: #0d1b2a;
+}
+
+/* ===== 滚动条美化 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 213, 79, 0.4);
+  border-radius: 3px;
+}
+
+/* ===== 粒子飘动动画 ===== */
+@keyframes float-particle {
+  0% { 
+    transform: translateY(0) translateX(0) rotate(0deg); 
+    opacity: 0; 
+  }
+  10% { opacity: 0.7; }
+  50% { 
+    transform: translateY(-100px) translateX(30px) rotate(180deg); 
+    opacity: 0.5; 
+  }
+  90% { opacity: 0.3; }
+  100% { 
+    transform: translateY(-200px) translateX(-20px) rotate(360deg); 
+    opacity: 0; 
+  }
+}
+
+/* ===== 呼吸光晕动画 ===== */
+@keyframes breathe-glow {
+  0%, 100% { 
+    transform: scale(1);
+  }
+  50% { 
+    transform: scale(1.06);
+  }
+}
+
+/* ===== 脉冲动画（录音按钮） ===== */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+/* ===== 光标闪烁 ===== */
+@keyframes blink-cursor {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* ===== 淡入动画 ===== */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== 工具类 ===== */
+.glass-effect {
+  background: var(--color-glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--color-glass-border);
+}
