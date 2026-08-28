@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Slide } from '../utils/pptParser';
+import { usePptxStructure, StructuralSlide } from './PptStructuralViewer';
 
 interface PptViewerProps {
   pptFile?: File | null;
@@ -8,16 +9,28 @@ interface PptViewerProps {
   topic?: string;
 }
 
-// PPT投影查看器 - 优先显示高清图片，回退到Canvas文本
-export const PptViewer: React.FC<PptViewerProps> = ({ slideImages, slides, topic }) => {
+// PPT投影查看器 - 优先结构化渲染，回退高清图片，再回退Canvas文本
+export const PptViewer: React.FC<PptViewerProps> = ({ pptFile, slideImages, slides, topic }) => {
   const [currentPage, setCurrentPage] = useState(0);
 
-  // 判断使用哪种模式
+  // 结构化解析（pptx-parser），失败时自动回退到图片/文本模式
+  const { structure, loading: structuralLoading } = usePptxStructure(pptFile ?? undefined);
+
   const hasImages = slideImages && slideImages.length > 0;
   const hasSlides = slides && slides.length > 0;
-  const totalPages = hasImages ? slideImages.length : (hasSlides ? slides.length : 0);
+  const structuralSlides = structure?.slides ?? [];
+  const useStructural = !!pptFile && (structuralLoading || structuralSlides.length > 0);
 
-  if (!hasImages && !hasSlides) return null;
+  let totalPages = 0;
+  if (useStructural) {
+    totalPages = structuralLoading ? 1 : structuralSlides.length;
+  } else if (hasImages) {
+    totalPages = slideImages!.length;
+  } else if (hasSlides) {
+    totalPages = slides!.length;
+  } else {
+    return null;
+  }
 
   const goPrev = () => setCurrentPage(p => Math.max(0, p - 1));
   const goNext = () => setCurrentPage(p => Math.min(totalPages - 1, p + 1));
@@ -67,7 +80,7 @@ export const PptViewer: React.FC<PptViewerProps> = ({ slideImages, slides, topic
             fontSize: '11px',
             fontWeight: 600,
           }}>
-            {currentPage + 1} / {totalPages}
+            {structuralLoading ? '解析中…' : `${currentPage + 1} / ${totalPages}`}
           </span>
         </div>
 
@@ -81,10 +94,20 @@ export const PptViewer: React.FC<PptViewerProps> = ({ slideImages, slides, topic
           justifyContent: 'center',
           minHeight: '200px',
         }}>
-          {hasImages ? (
+          {useStructural ? (
+            structuralLoading ? (
+              <LoadingPlaceholder />
+            ) : structuralSlides.length > 0 ? (
+              /* ===== 结构化渲染模式 ===== */
+              <StructuralSlide
+                slide={structuralSlides[Math.min(currentPage, structuralSlides.length - 1)]}
+                pageSize={structure!.pageSize}
+              />
+            ) : null
+          ) : hasImages ? (
             /* ===== 高清图片模式 ===== */
             <img
-              src={slideImages[currentPage]}
+              src={slideImages![currentPage]}
               alt={`幻灯片 ${currentPage + 1}`}
               style={{
                 width: '100%',
@@ -94,13 +117,13 @@ export const PptViewer: React.FC<PptViewerProps> = ({ slideImages, slides, topic
                 display: 'block',
               }}
               onError={(e) => {
-                console.error('图片加载失败:', slideImages[currentPage]);
+                console.error('图片加载失败:', slideImages![currentPage]);
                 (e.target as HTMLImageElement).style.display = 'none';
               }}
             />
           ) : hasSlides ? (
             /* ===== Canvas文本回退模式 ===== */
-            <SlideCanvas slide={slides[currentPage]} total={slides.length} />
+            <SlideCanvas slide={slides![currentPage]} total={slides!.length} />
           ) : null}
         </div>
 
@@ -170,6 +193,31 @@ export const PptViewer: React.FC<PptViewerProps> = ({ slideImages, slides, topic
     </div>
   );
 };
+
+/* 结构化解析加载占位 */
+const LoadingPlaceholder: React.FC = () => (
+  <div style={{
+    width: '100%',
+    minHeight: '200px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    color: 'rgba(0,0,0,0.45)',
+    fontSize: '13px',
+  }}>
+    <span style={{
+      width: '14px',
+      height: '14px',
+      border: '2px solid rgba(0,0,0,0.12)',
+      borderTopColor: '#FF8F00',
+      borderRadius: '50%',
+      animation: 'spin 0.8s linear infinite',
+      display: 'inline-block',
+    }} />
+    正在解析 PPT 结构…
+  </div>
+);
 
 /* Canvas文本回退组件 */
 const SlideCanvas: React.FC<{ slide: Slide; total: number }> = ({ slide, total }) => {

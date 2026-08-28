@@ -9,6 +9,9 @@ dist-ssr
 *.local
 public/uploads
 
+# Office lock files
+~$*
+
 # Logs
 *.log
 
@@ -17,3 +20,6 @@ public/uploads
 !.vscode/extensions.json
 .idea
 .DS_Store
+
+# Claude Code (local-only)
+.claude/

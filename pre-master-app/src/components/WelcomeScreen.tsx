@@ -33,8 +33,9 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
     try {
       if (file.name.endsWith('.pptx') || file.name.endsWith('.ppt')) {
         // 1. JSZip解析文本内容（用于AI理解）
+        let parsedSlides: Slide[] = [];
         try {
-          const parsedSlides = await parsePptx(file);
+          parsedSlides = await parsePptx(file);
           setSlides(parsedSlides);
           setPptContent(slidesToText(parsedSlides));
           if (parsedSlides.length === 0) {
@@ -60,9 +61,21 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
 
           if (response.ok) {
             const data = await response.json();
-            const images = data.images.map((img: any) => img.url);
-            setSlideImages(images);
-            console.log(`PPT转换成功: ${data.totalPages}页`);
+            if (Array.isArray(data.slides) && data.slides.length > 0) {
+              // 文本回退模式（未装 LibreOffice/pdftoppm）：
+              // 后端只提取了每页文本 + 第一张内嵌图，无法整页成像。
+              // 不设置 slideImages，让 PptViewer 改用已解析的文本 slides 渲染真实内容。
+              if (parsedSlides.length === 0) {
+                setSlides(data.slides);
+                setPptContent(slidesToText(data.slides));
+              }
+              console.log(`PPT进入文本回退模式: ${data.totalPages}页`);
+            } else {
+              // 高清模式（LibreOffice 已就绪）：images 为整页渲染的 PNG
+              const images = data.images.map((img: any) => img.url);
+              setSlideImages(images);
+              console.log(`PPT转换成功: ${data.totalPages}页（高清图片）`);
+            }
           } else {
             const errData = await response.json();
             console.warn('PPT图片转换失败:', errData.error);
