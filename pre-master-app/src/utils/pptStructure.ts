@@ -161,7 +161,16 @@ export function toCssColor(color: unknown): string | undefined {
  * 使用动态 import，避免 pptx-parser（浏览器专属 UMD bundle）在 SSR/构建时被执行。
  */
 export async function parsePptxStructure(file: File): Promise<PptxStructure> {
-  const { default: parse } = await import('pptx-parser');
+  const mod: any = await import('pptx-parser');
+  // pptx-parser 是 UMD bundle：Vite/Rolldown 把整个 module.exports 作为 default 导出，
+  // 而 module.exports 本身是 webpack 入口模块的导出对象（含 default/vf 两个 getter），
+  // 真正的 parse 函数藏在 default.default 里。这里做兼容解包，避免「parse is not a function」。
+  const parse =
+    mod?.default?.default ??
+    mod?.default ??
+    mod?.parse ??
+    mod?.vf ??
+    mod;
   const raw = await parse(file, { flattenGroup: true });
   return raw as PptxStructure;
 }

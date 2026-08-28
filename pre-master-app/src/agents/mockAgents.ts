@@ -61,27 +61,200 @@ const mockQuestions: Record<string, string[]> = {
   ],
 };
 
-// 跟踪每个评委已问的问题数量
+// ===== 内容感知的 Mock 评委 =====
+// 旧实现直接轮询固定题库、完全忽略学生回答，导致「固定一问一答」。
+// 这里改为：先对回答内容做简短点评，再基于回答关键词追问，让交互有针对性。
+
+type FollowUpCategory =
+  | 'vague'
+  | 'data'
+  | 'method'
+  | 'conclusion'
+  | 'limitation'
+  | 'innovation'
+  | 'generic';
+
+// 关键词 → 追问池。命中时优先追问，比固定题库更贴合回答内容。
+const keywordFollowUps: { category: FollowUpCategory; pattern: RegExp; questions: string[] }[] = [
+  {
+    category: 'data',
+    pattern: /数据|样本|样本量|统计|显著|置信|百分比|%|采集|清洗|偏差|实验组|对照组/,
+    questions: [
+      '这个数据的样本量是多少？有没有做过统计显著性检验？',
+      '数据是怎么采集和清洗的？来源的可靠性如何？',
+      '你的关键指标置信区间是多少？有没有考虑数据偏差？',
+    ],
+  },
+  {
+    category: 'method',
+    pattern: /方法|算法|模型|架构|框架|流程|步骤|训练|调参|对比|baseline|基准|消融|控制变量/,
+    questions: [
+      '相比现有 baseline，你这个方法的核心改进点到底在哪？',
+      '控制变量是怎么设置的？会不会存在混杂因素？',
+      '这个方案的复杂度如何？在边界场景下验证过吗？',
+    ],
+  },
+  {
+    category: 'conclusion',
+    pattern: /结果|结论|提升|优化|效果|准确率|性能|精度|召回|收敛|损失|验证/,
+    questions: [
+      '这个结论是不是下得有点绝对了？证据链完整吗？',
+      '性能提升的代价是什么？换其他数据集还成立吗？',
+      '如果换一批数据，这个结论能稳定复现吗？',
+    ],
+  },
+  {
+    category: 'limitation',
+    pattern: /局限|不足|缺点|问题|挑战|失效|边界|未来|下一步|后续|改进|展望/,
+    questions: [
+      '既然提到了局限，你认为最致命的短板是哪一个？',
+      '针对这个不足，你下一步打算怎么解决？',
+      '在什么场景下这个方法会彻底失效？',
+    ],
+  },
+  {
+    category: 'innovation',
+    pattern: /创新|贡献|意义|价值|应用|落地|启发|亮点|动机|灵感|用途/,
+    questions: [
+      '能用一个具体的例子说明这个创新点的实际价值吗？',
+      '如果落地到真实场景，最大的阻力是什么？',
+      '相比已有工作，你的贡献到底新在哪里？',
+    ],
+  },
+];
+
+// 含糊 / 未正面回答时的追问
+const vagueQuestions = [
+  '这个回答有点笼统了，能再具体展开一下吗？',
+  '你刚才没有正面回答，能否用数据或例子再说明一遍？',
+  '请说得更明确一些，你的核心结论到底是什么？',
+];
+
+// 轮询索引：题库与关键词追问池各自循环，避免机械重复
 const questionIndex: Record<string, number> = {
   profWang: 0,
   profLi: 0,
   studentZhang: 0,
 };
+const followUpIndex: Record<string, number> = {};
 
-// 获取Mock回复
-export function getMockResponse(agentId: string, _userMessage: string): string {
-  const questions = mockQuestions[agentId] || mockQuestions.profWang;
-  const idx = questionIndex[agentId] || 0;
-  const question = questions[idx % questions.length];
-  questionIndex[agentId] = idx + 1;
-  return question;
+// 识别回答内容所属的追问方向
+function detectCategory(answer: string): FollowUpCategory {
+  if (
+    answer.length < 8 ||
+    /不知道|不清楚|没考虑|没想过|不确定|随便|大概吧|忘了|没准备|嗯|额|就这样/.test(answer)
+  ) {
+    return 'vague';
+  }
+  for (const k of keywordFollowUps) {
+    if (k.pattern.test(answer)) return k.category;
+  }
+  return 'generic';
 }
 
-// 重置Mock状态
+// 判断用户是否在反问 / 要求评委澄清（如「具体是哪个技术细节？」）
+// 命中时评委应解释自己问的是什么，而不是抛出新问题
+export function isClarifyingQuestion(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t || t.length > 60) return false;
+  // 强信号：明确表示没听懂 / 要求展开解释
+  if (/没太懂|没听懂|没明白|再说一遍|再解释|请具体|具体指|指的是哪|什么意思/.test(t)) {
+    return true;
+  }
+  // 弱信号：带问号的反问句
+  return /[?？]/.test(t) && /(哪个|哪一|为什么|能不能|能否|是否|怎么理解|如何理解|是指)/.test(t);
+}
+
+// 简短点评：让评委「听见」回答内容，而非直接抛下一个问题
+function generateFeedback(agent: Agent, answer: string, category: FollowUpCategory): string {
+  if (category === 'vague') {
+    if (agent.personality === 'strict') return '这个回答太空洞了，缺乏实质性依据。';
+    if (agent.personality === 'gentle') return '方向没问题，但可以再具体一点。';
+    return '我没太听明白，能换个更通俗的说法吗？';
+  }
+  const hit = keywordFollowUps.find((k) => k.pattern.test(answer));
+  if (hit) {
+    const keyword = (answer.match(hit.pattern) || ['这一点'])[0];
+    if (agent.personality === 'strict') return `你提到了「${keyword}」，但说服力还不够。`;
+    if (agent.personality === 'gentle') return `围绕「${keyword}」展开得不错，我们再深入一点。`;
+    return `「${keyword}」这块听起来挺有意思的。`;
+  }
+  if (agent.personality === 'strict') return '这个回答基本切题，但深度还不够。';
+  if (agent.personality === 'gentle') return '讲得不错，我再追问一个细节。';
+  return '明白了，那我再问一个问题。';
+}
+
+// 基于回答内容的追问
+function generateFollowUp(agent: Agent, answer: string, category: FollowUpCategory): string {
+  if (category === 'vague') {
+    const key = `${agent.id}:vague`;
+    const i = followUpIndex[key] || 0;
+    followUpIndex[key] = i + 1;
+    return vagueQuestions[i % vagueQuestions.length];
+  }
+  const pool = keywordFollowUps.find((k) => k.category === category)?.questions;
+  if (pool) {
+    const key = `${agent.id}:${category}`;
+    const i = followUpIndex[key] || 0;
+    followUpIndex[key] = i + 1;
+    return pool[i % pool.length];
+  }
+  // 未命中关键词时，回退到该评委的固定题库（轮询）
+  const questions = mockQuestions[agent.id] || mockQuestions.profWang;
+  const idx = questionIndex[agent.id] || 0;
+  questionIndex[agent.id] = idx + 1;
+  return questions[idx % questions.length];
+}
+
+// 用户反问时的澄清回复：评委说明自己指的是什么，引导学生展开
+function generateClarification(agent: Agent): string {
+  if (agent.personality === 'strict') {
+    return '我指的是你汇报里所选技术方案的实现细节，比如设计依据和取舍。你最好把这部分讲具体，不要只给结论。';
+  }
+  if (agent.personality === 'gentle') {
+    return '别紧张，我想听的是你汇报里某个具体技术细节是怎么实现的。从你最拿手的部分讲起就可以。';
+  }
+  return '啊，我是想问汇报里有个技术细节我没太听懂，你能从最简单的地方再讲讲吗？我想搞明白背后的思路。';
+}
+
+// 换人进场时的开场白：新评委开新话题，而非点评上一位评委的问答
+const handoffOpeners: Record<string, string> = {
+  strict: '我也来问一个问题。',
+  gentle: '我来补充一个问题。',
+  curious: '嗯，我也有个想问的。',
+};
+
+// 获取 Mock 回复：
+// - 用户反问/求澄清 → 同一评委澄清（一对一延续）
+// - 换人进场（isHandoff）→ 新评委开新提问线
+// - 其余 → 点评 + 追问
+export function getMockResponse(agentId: string, userMessage: string, isHandoff = false): string {
+  const agent = agents[agentId] || agents.profWang;
+  const answer = (userMessage || '').trim();
+
+  if (isClarifyingQuestion(answer)) {
+    return generateClarification(agent);
+  }
+
+  if (isHandoff) {
+    const opener = handoffOpeners[agent.personality] || '我也来问一个问题。';
+    return `${opener} ${generateFollowUp(agent, answer, 'generic')}`;
+  }
+
+  const category = detectCategory(answer);
+  const feedback = generateFeedback(agent, answer, category);
+  const question = generateFollowUp(agent, answer, category);
+  return `${feedback} ${question}`;
+}
+
+// 重置 Mock 状态
 export function resetMockState() {
   questionIndex.profWang = 0;
   questionIndex.profLi = 0;
   questionIndex.studentZhang = 0;
+  for (const key of Object.keys(followUpIndex)) {
+    delete followUpIndex[key];
+  }
 }
 
 // 生成Mock复盘报告

@@ -74,10 +74,11 @@ export function useChat() {
     setIsLoading(true);
 
     try {
-      // 选择下一个评委
+      // 选择下一个评委（会话延续优先：默认同一评委继续，一对一深聊）
       const allMessages = [...messages, userMsg];
-      const nextAgentId = selectNextAgent(allMessages, lastAgentId);
-      const agent = getAgentInfo(nextAgentId);
+      const nextAgentId = selectNextAgent(allMessages, lastAgentId, text.trim());
+      // 是否为换人进场（新评委应开新提问线，而非点评上一位评委的问答）
+      const isHandoff = lastAgentId !== null && nextAgentId !== lastAgentId;
 
       // 获取回复（优先API，fallback到Mock）
       let response: { agentId: string; content: string } | null = null;
@@ -91,15 +92,16 @@ export function useChat() {
       }
 
       if (!response) {
-        response = await getJudgeResponse(nextAgentId, text.trim(), allMessages);
+        response = await getJudgeResponse(nextAgentId, text.trim(), allMessages, isHandoff);
       }
 
-      // 添加评委回复
+      // 添加评委回复（以实际应答的评委为准）
+      const respAgent = getAgentInfo(response.agentId);
       const judgeMsg: ChatMessage = {
         id: `msg-${Date.now()}-judge`,
         role: 'judge',
         agentId: response.agentId,
-        agentName: agent.name,
+        agentName: respAgent.name,
         content: response.content,
         timestamp: Date.now(),
       };
