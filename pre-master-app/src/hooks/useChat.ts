@@ -32,7 +32,7 @@ export function useChat() {
     resetAll,
   } = useSessionStore();
 
-  // 开始新答辩会话
+  // 开始新答辩会话（从汇报阶段开始：学生先汇报，评委按「结束汇报」后才反馈）
   const startSession = useCallback((newTopic: string, newPptContent: string, newSlides: Slide[], newSlideImages: string[], newPptFile: File | null) => {
     resetAll();
     resetMockState();
@@ -41,7 +41,7 @@ export function useChat() {
     useSessionStore.getState().setSlides(newSlides);
     useSessionStore.getState().setSlideImages(newSlideImages);
     useSessionStore.getState().setPptFile(newPptFile);
-    setPhase('presenting');
+    setPhase('reporting');
     startTimer();
 
     // 发送开场白（注入答辩主题）
@@ -59,24 +59,13 @@ export function useChat() {
     setLastAgentId(opening.agentId);
   }, [resetAll, setPhase, startTimer, addMessage, setLastAgentId]);
 
-  // 发送用户消息并获取评委回复
-  const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || isLoading) return;
-
-    // 添加用户消息
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      role: 'user',
-      content: text.trim(),
-      timestamp: Date.now(),
-    };
-    addMessage(userMsg);
+  // 请求评委回复（共用路径：选择评委 → 优先API → Mock兜底 → 追加回复）
+  // userText：供 Mock 基于内容追问；结束汇报反馈时传完整汇报文本
+  const requestJudgeReply = useCallback(async (allMessages: ChatMessage[], userText: string) => {
     setIsLoading(true);
-
     try {
       // 选择下一个评委（会话延续优先：默认同一评委继续，一对一深聊）
-      const allMessages = [...messages, userMsg];
-      const nextAgentId = selectNextAgent(allMessages, lastAgentId, text.trim());
+      const nextAgentId = selectNextAgent(allMessages, lastAgentId, userText);
       // 是否为换人进场（新评委应开新提问线，而非点评上一位评委的问答）
       const isHandoff = lastAgentId !== null && nextAgentId !== lastAgentId;
 
@@ -92,7 +81,7 @@ export function useChat() {
       }
 
       if (!response) {
-        response = await getJudgeResponse(nextAgentId, text.trim(), allMessages, isHandoff);
+        response = await getJudgeResponse(nextAgentId, userText, allMessages, isHandoff);
       }
 
       // 添加评委回复（以实际应答的评委为准）
@@ -112,7 +101,44 @@ export function useChat() {
     } finally {
       setIsLoading(false);
     }
-  }, [messages, lastAgentId, isLoading, addMessage, setIsLoading, setLastAgentId]);
+  }, [lastAgentId, addMessage, setIsLoading, setLastAgentId]);
+
+  // 发送用户消息：
+  // - 汇报阶段：只记录汇报内容（可分多次发言），评委不即时评价，等「结束汇报」
+  // - 答辩阶段：保持现状，每轮发言后立即回复
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim() || isLoading) return;
+
+    // 添加用户消息
+    const userMsg: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: text.trim(),
+      timestamp: Date.now(),
+    };
+    addMessage(userMsg);
+
+    // 汇报阶段：不触发评委反馈
+    if (useSessionStore.getState().phase === 'reporting') return;
+
+    await requestJudgeReply([...messages, userMsg], text.trim());
+  }, [messages, isLoading, addMessage, requestJudgeReply]);
+
+  // 结束汇报：切换到答辩阶段，评委基于汇报内容给出第一轮反馈
+  const endReport = useCallback(async () => {
+    const state = useSessionStore.getState();
+    if (state.phase !== 'reporting' || state.isLoading) return;
+    setPhase('presenting');
+
+    // 汇总汇报内容（学生可能分多次发言）；无内容时评委直接开始提问
+    const reportText = state.messages
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content)
+      .join('')
+      .trim();
+
+    await requestJudgeReply(state.messages, reportText);
+  }, [setPhase, requestJudgeReply]);
 
   // 结束答辩，生成报告（API模式下先尝试真实AI评估，失败则回退Mock）
   const endSession = useCallback(async () => {
@@ -147,6 +173,7 @@ export function useChat() {
     pptContent,
     startSession,
     sendMessage,
+    endReport,
     endSession,
     restart,
   };

@@ -226,6 +226,7 @@ const handoffOpeners: Record<string, string> = {
 
 // 获取 Mock 回复：
 // - 用户反问/求澄清 → 同一评委澄清（一对一延续）
+// - 无回答内容（空汇报结束）→ 直接抛出第一个问题
 // - 换人进场（isHandoff）→ 新评委开新提问线
 // - 其余 → 点评 + 追问
 export function getMockResponse(agentId: string, userMessage: string, isHandoff = false): string {
@@ -234,6 +235,11 @@ export function getMockResponse(agentId: string, userMessage: string, isHandoff 
 
   if (isClarifyingQuestion(answer)) {
     return generateClarification(agent);
+  }
+
+  // 汇报结束但没有汇报内容：评委直接抛出第一个问题（不加点评）
+  if (!answer) {
+    return generateFollowUp(agent, '', 'generic');
   }
 
   if (isHandoff) {

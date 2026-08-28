@@ -16,7 +16,7 @@ import { getAgentInfo } from './agents/agentManager';
 
 function App() {
   const [showSettings, setShowSettings] = useState(false);
-  const { messages, isLoading, phase, topic, startSession, sendMessage, endSession, restart } = useChat();
+  const { messages, isLoading, phase, topic, startSession, sendMessage, endReport, endSession, restart } = useChat();
   const lastAgentId = useSessionStore((s) => s.lastAgentId);
   const report = useSessionStore((s) => s.report);
   const slides = useSessionStore((s) => s.slides);
@@ -192,32 +192,59 @@ function App() {
 
         {/* 文字输入框 - 语音识别的fallback */}
         <div style={{ flex: 1, maxWidth: '440px' }}>
-          <TextInput onSend={sendMessage} disabled={isLoading} placeholder="输入你的回答..." />
+          <TextInput onSend={sendMessage} disabled={isLoading} placeholder={phase === 'reporting' ? '输入你的汇报内容...' : '输入你的回答...'} />
         </div>
 
-        {/* 结束按钮 */}
-        <button
-          onClick={endSession}
-          style={{
-            background: 'transparent',
-            border: '1px solid rgba(229,57,53,0.4)',
-            color: 'rgba(229,57,53,0.8)',
-            padding: '8px 20px',
-            borderRadius: '16px',
-            fontSize: '12px',
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-            transition: 'all 0.2s ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'rgba(229,57,53,0.15)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent';
-          }}
-        >
-          结束答辩
-        </button>
+        {/* 结束汇报（仅汇报阶段）/ 结束答辩（答辩阶段） */}
+        {phase === 'reporting' ? (
+          <button
+            onClick={endReport}
+            style={{
+              background: 'linear-gradient(135deg, rgba(255,213,79,0.95), rgba(255,167,38,0.9))',
+              border: '1px solid rgba(255,213,79,0.6)',
+              color: '#3e2723',
+              fontWeight: 600,
+              padding: '8px 24px',
+              borderRadius: '16px',
+              fontSize: '13px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 0 16px rgba(255,213,79,0.35)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'scale(1.05)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+            }}
+          >
+            结束汇报
+          </button>
+        ) : (
+          <button
+            onClick={endSession}
+            style={{
+              background: 'transparent',
+              border: '1px solid rgba(229,57,53,0.4)',
+              color: 'rgba(229,57,53,0.8)',
+              padding: '8px 20px',
+              borderRadius: '16px',
+              fontSize: '12px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(229,57,53,0.15)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            结束答辩
+          </button>
+        )}
       </div>
     </div>
   );

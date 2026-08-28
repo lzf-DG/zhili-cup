@@ -19,7 +19,7 @@ export interface ChatMessage {
   timestamp: number;
 }
 
-export type SessionPhase = 'idle' | 'welcome' | 'presenting' | 'finished';
+export type SessionPhase = 'idle' | 'welcome' | 'reporting' | 'presenting' | 'finished';
 
 export interface ReportData {
   overallScore: number;
