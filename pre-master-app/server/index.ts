@@ -1,9 +1,11 @@
 import express from 'express';
 import cors from 'cors';
-import { exec, spawn } from 'child_process';
+import { exec, spawn, spawnSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import JSZip from 'jszip';
+import { XMLParser } from 'fast-xml-parser';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,10 +23,140 @@ if (!fs.existsSync(uploadsDir)) {
 }
 app.use('/uploads', express.static(uploadsDir));
 
-// LibreOffice路径
-const SOFFICE_PATH = 'C:\\Program Files\\LibreOffice\\program\\soffice.exe';
-// Poppler pdftoppm路径
-const PDFTOPPM_PATH = 'C:\\Users\\fannb\\AppData\\Local\\Microsoft\\WinGet\\Packages\\oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe\\poppler-25.07.0\\Library\\bin\\pdftoppm.exe';
+// Resolve executable helper: check env, common defaults, then PATH
+function resolveExecutable(envName: string, binNames: string[], defaults: string[]): string | null {
+  // 1) environment override
+  const envPath = process.env[envName];
+  if (envPath && fs.existsSync(envPath)) return envPath;
+
+  // 2) check common default locations
+  for (const p of defaults) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {}
+  }
+
+  // 3) try to find in PATH using `which`
+  try {
+    for (const name of binNames) {
+      const which = spawnSync('which', [name]);
+      if (which && which.status === 0) {
+        const found = which.stdout.toString().trim();
+        if (found) return found;
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+// Platform-specific sensible defaults
+const defaultSofficePaths = process.platform === 'win32'
+  ? ['C:\\Program Files\\LibreOffice\\program\\soffice.exe']
+  : process.platform === 'darwin'
+    ? ['/Applications/LibreOffice.app/Contents/MacOS/soffice']
+    : ['/usr/bin/soffice', '/usr/local/bin/soffice'];
+
+const defaultPdftoppmPaths = process.platform === 'win32'
+  ? ['C:\\Program Files\\poppler\\bin\\pdftoppm.exe']
+  : ['/opt/homebrew/bin/pdftoppm', '/usr/local/bin/pdftoppm', '/usr/bin/pdftoppm'];
+
+const SOFFICE_PATH = resolveExecutable('SOFFICE_PATH', ['soffice'], defaultSofficePaths) || '';
+const PDFTOPPM_PATH = resolveExecutable('PDFTOPPM_PATH', ['pdftoppm'], defaultPdftoppmPaths) || '';
+
+// --------- Server-side PPTX parsing fallback (uses JSZip + fast-xml-parser) ---------
+interface SlideImage {
+  id: string;
+  dataUrl: string;
+}
+
+interface SlideData {
+  index: number;
+  title: string;
+  content: string;
+  images: SlideImage[];
+  notes?: string;
+}
+
+async function parsePptxBuffer(buffer: Buffer): Promise<SlideData[]> {
+  const zip = await JSZip.loadAsync(buffer);
+  const files = Object.keys(zip.files);
+
+  // Extract media files
+  const mediaFiles: Record<string, string> = {};
+  for (const p of files) {
+    if (p.startsWith('ppt/media/') && !zip.files[p].dir) {
+      const fileName = p.split('/').pop() || p;
+      const content = await zip.files[p].async('base64');
+      const ext = fileName.split('.').pop()?.toLowerCase() || 'png';
+      const mime = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+      mediaFiles[fileName] = `data:${mime};base64,${content}`;
+    }
+  }
+
+  // Parse slide relationships to map rId -> media filename
+  const relsMap: Record<string, Record<string, string>> = {};
+  for (const p of files) {
+    const m = p.match(/^ppt\/slides\/_rels\/slide(\d+)\.xml\.rels$/i);
+    if (m) {
+      const slideNum = m[1];
+      const xml = await zip.files[p].async('text');
+      const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '' });
+      const obj = parser.parse(xml);
+      const relationships = obj.Relationships?.Relationship || [];
+      const map: Record<string, string> = {};
+      const relArr = Array.isArray(relationships) ? relationships : [relationships];
+      for (const rel of relArr) {
+        const id = rel.Id || rel['Id'] || rel.id || rel['@_Id'] || rel['@id'];
+        const target = rel.Target || rel['Target'] || rel.target || rel['@_Target'] || rel['@target'];
+        if (id && target) {
+          const fname = target.split('/').pop();
+          if (fname && mediaFiles[fname]) map[id] = fname;
+        }
+      }
+      relsMap[slideNum] = map;
+    }
+  }
+
+  // Collect slide files
+  const slideFiles = files.filter(n => /^ppt\/slides\/slide\d+\.xml$/i.test(n))
+    .sort((a, b) => {
+      const na = parseInt(a.match(/slide(\d+)/)?.[1] || '0');
+      const nb = parseInt(b.match(/slide(\d+)/)?.[1] || '0');
+      return na - nb;
+    });
+
+  const slides: SlideData[] = [];
+  for (let i = 0; i < slideFiles.length; i++) {
+    const name = slideFiles[i];
+    const slideNum = (i + 1).toString();
+    const xml = await zip.files[name].async('text');
+    // naive text extraction: find all <a:t>text</a:t>
+    const textMatches = Array.from(xml.matchAll(/<a:t[^>]*?>([\s\S]*?)<\/a:t>/g));
+    const texts = textMatches.map(m => (m[1] || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const title = texts[0] || `第 ${i + 1} 页`;
+    const content = texts.slice(1).join('\n');
+
+    // find blip r:embed occurrences
+    const imageMatches = Array.from(xml.matchAll(/<a:blip[^>]*r:embed="([^"]+)"[^>]*>/g));
+    const images: SlideImage[] = [];
+    const seen = new Set<string>();
+    for (const im of imageMatches) {
+      const rid = im[1];
+      const fname = relsMap[slideNum]?.[rid];
+      if (fname && !seen.has(fname)) {
+        seen.add(fname);
+        images.push({ id: rid, dataUrl: mediaFiles[fname] });
+      }
+    }
+
+    slides.push({ index: i + 1, title, content, images });
+  }
+
+  return slides;
+}
+
+// ------------------------------------------------------------------------------------
 
 // 简单的multipart解析（不依赖multer）
 function parseMultipart(buffer: Buffer, boundary: string): { filename: string; data: Buffer } | null {
@@ -97,28 +229,72 @@ app.post('/api/convert-ppt', async (req, res) => {
       fs.writeFileSync(tempPptx, data);
       
       console.log(`[转换] 步骤1: PPT → PDF (LibreOffice)`);
-      // 步骤1: LibreOffice 将 PPT 转为 PDF
-      const userInstallDir = path.join(workDir, 'lo_profile');
-      fs.mkdirSync(userInstallDir, { recursive: true });
-      await execCommand(SOFFICE_PATH, [
-        '--headless', '--norestore',
-        `-env:UserInstallation=file:///${userInstallDir.replace(/\\/g, '/')}`,
-        '--convert-to', 'pdf',
-        '--outdir', workDir, tempPptx
-      ]);
-      
-      if (!fs.existsSync(tempPdf)) {
-        throw new Error('LibreOffice未生成PDF文件');
+
+      // 如果 LibreOffice 和 pdftoppm 可用，则走原来的二进制流程，生成 PNG
+      if (SOFFICE_PATH && PDFTOPPM_PATH) {
+        // 步骤1: LibreOffice 将 PPT 转为 PDF
+        const userInstallDir = path.join(workDir, 'lo_profile');
+        fs.mkdirSync(userInstallDir, { recursive: true });
+        await execCommand(SOFFICE_PATH, [
+          '--headless', '--norestore',
+          `-env:UserInstallation=file:///${userInstallDir.replace(/\\/g, '/')}`,
+          '--convert-to', 'pdf',
+          '--outdir', workDir, tempPptx
+        ]);
+
+        if (!fs.existsSync(tempPdf)) {
+          throw new Error('LibreOffice未生成PDF文件');
+        }
+
+        console.log(`[转换] 步骤2: PDF → 逐页PNG (pdftoppm)`);
+        // 步骤2: pdftoppm 将 PDF 每页转为高清 PNG
+        const pngPrefix = path.join(workDir, 'slide');
+        await execCommand(PDFTOPPM_PATH, [
+          '-png', '-r', '150',  // 150 DPI 高清
+          '-scale-to', '1280',  // 宽度1280px
+          tempPdf, pngPrefix
+        ]);
+      } else {
+        // 回退：在服务器端使用 JSZip 解析 .pptx，提取每页文本与内嵌图片（data URL）
+        console.log('[转换] 二进制工具未就绪，使用 JSZip 服务器端解析回退');
+
+        const slides = await parsePptxBuffer(data);
+
+        // 将内嵌图片写入 uploads 目录并构建 slideImages URL（优先使用嵌入图片）
+        const images: string[] = [];
+        fs.mkdirSync(workDir, { recursive: true });
+        slides.forEach((s, i) => {
+          if (s.images && s.images.length > 0) {
+            // 取第一张图片作为幻灯片预览（保持与前端 slideImages 用法兼容）
+            const img = s.images[0];
+            const base64 = img.dataUrl.split(',')[1] || '';
+            const ext = img.dataUrl.match(/data:image\/(.+);base64/)?.[1] || 'png';
+            const fname = `slide_${i + 1}.${ext}`;
+            const outPath = path.join(workDir, fname);
+            fs.writeFileSync(outPath, base64, 'base64');
+            images.push(`/uploads/${sessionId}/${fname}`);
+          } else {
+            images.push('');
+          }
+        });
+
+        // 保存文本 slides JSON 以供前端使用
+        const slidesJson = path.join(workDir, 'slides.json');
+        fs.writeFileSync(slidesJson, JSON.stringify(slides, null, 2));
+
+        const resp = {
+          success: true,
+          totalPages: slides.length,
+          images: images.map((url, i) => ({ index: i, url })),
+          slides,
+        };
+
+        // 清理上传的 pptx（保留解析结果）
+        try { fs.unlinkSync(tempPptx); } catch {}
+        try { fs.unlinkSync(tempPdf); } catch {}
+
+        return res.json(resp);
       }
-      
-      console.log(`[转换] 步骤2: PDF → 逐页PNG (pdftoppm)`);
-      // 步骤2: pdftoppm 将 PDF 每页转为高清 PNG
-      const pngPrefix = path.join(workDir, 'slide');
-      await execCommand(PDFTOPPM_PATH, [
-        '-png', '-r', '150',  // 150 DPI 高清
-        '-scale-to', '1280',  // 宽度1280px
-        tempPdf, pngPrefix
-      ]);
       
       // 读取生成的 PNG 文件
       const imageFiles = fs.readdirSync(workDir)

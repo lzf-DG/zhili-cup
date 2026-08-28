@@ -93,6 +93,43 @@ pre-master-app/
 
 无需额外环境变量。API配置通过应用内设置页面管理。
 
+## PPT 转换说明（可选：高清 PNG 输出）
+
+本项目支持两种将 `.pptx` 转为可在浏览器投影的方式：
+
+- 优先（高清 PNG）：后端使用 LibreOffice(`soffice`)将 PPTX 转为 PDF，再用 Poppler 的 `pdftoppm` 导出每页高清 PNG。这能保证视觉效果与原始幻灯片接近，但依赖本机二进制工具（跨平台）。
+- 回退（无需外部依赖）：当服务端检测不到上述二进制工具时，服务端会在服务器上使用纯 JS 解析 `.pptx`（提取文本与内嵌图片），返回文本幻灯片和嵌入图片供前端显示。此方式不需要额外安装任何系统依赖，但生成的是文本+内嵌图，而非完全渲染的 PNG 页面。
+
+如果你希望在 macOS 上启用“高清 PNG 输出”，请按以下步骤安装并配置：
+
+1. 安装 Homebrew（如果尚未安装）：
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+2. 安装 LibreOffice 与 Poppler：
+
+```bash
+brew install --cask libreoffice
+brew install poppler
+```
+
+3. 将可执行路径设置为环境变量（可选，服务会自动在常见路径查找）：
+
+```bash
+export SOFFICE_PATH="/Applications/LibreOffice.app/Contents/MacOS/soffice"
+export PDFTOPPM_PATH="$(which pdftoppm)"
+```
+
+4. 重新启动项目（在 `pre-master-app` 目录下）：
+
+```bash
+npm run dev
+```
+
+说明：如果不想安装本机二进制，也可以使用默认回退解析，应用仍然可以读取 PPT 的文本与内嵌图片用于投影。
+
 ## License
 
 MIT
