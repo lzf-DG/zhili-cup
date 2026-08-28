@@ -47,19 +47,20 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
         }
 
         // 2. 后端转换为高清图片（LibreOffice + pdftoppm）
+        // 使用相对路径，经 vite 代理转发到后端，避免硬编码端口
         setConvertingPpt(true);
         try {
           const formData = new FormData();
           formData.append('file', file);
-          
-          const response = await fetch('http://localhost:3001/api/convert-ppt', {
+
+          const response = await fetch('/api/convert-ppt', {
             method: 'POST',
             body: formData,
           });
 
           if (response.ok) {
             const data = await response.json();
-            const images = data.images.map((img: any) => `http://localhost:3001${img.url}`);
+            const images = data.images.map((img: any) => img.url);
             setSlideImages(images);
             console.log(`PPT转换成功: ${data.totalPages}页`);
           } else {

@@ -45,10 +45,13 @@ export function getAgentInfo(agentId: string) {
   return agents[agentId] || agents.profWang;
 }
 
-// 获取开场白
-export function getOpeningMessage(): { agentId: string; content: string } {
+// 获取开场白（注入答辩主题，让评委围绕主题开场）
+export function getOpeningMessage(topic?: string): { agentId: string; content: string } {
+  const greeting = agents.profWang.greeting;
   return {
     agentId: 'profWang',
-    content: agents.profWang.greeting,
+    content: topic?.trim()
+      ? `本次答辩主题：「${topic.trim()}」。${greeting}`
+      : greeting,
   };
 }

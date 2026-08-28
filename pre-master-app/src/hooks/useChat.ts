@@ -2,9 +2,16 @@ import { useCallback } from 'react';
 import { useSessionStore } from '../store/sessionStore';
 import { selectNextAgent, getJudgeResponse, getAgentInfo, getOpeningMessage } from '../agents/agentManager';
 import { resetMockState, generateMockReport } from '../agents/mockAgents';
-import { callApi, isApiConfigured } from '../agents/apiAgent';
+import { callApi, generateReportViaApi, isApiConfigured } from '../agents/apiAgent';
 import { ChatMessage } from '../agents/types';
 import { Slide } from '../utils/pptParser';
+
+// 秒数格式化为 mm:ss
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
 
 export function useChat() {
   const {
@@ -37,8 +44,8 @@ export function useChat() {
     setPhase('presenting');
     startTimer();
 
-    // 发送开场白
-    const opening = getOpeningMessage();
+    // 发送开场白（注入答辩主题）
+    const opening = getOpeningMessage(newTopic);
     const agent = getAgentInfo(opening.agentId);
     const msg: ChatMessage = {
       id: `msg-${Date.now()}`,
@@ -74,11 +81,15 @@ export function useChat() {
 
       // 获取回复（优先API，fallback到Mock）
       let response: { agentId: string; content: string } | null = null;
-      
+
+      // 注入答辩上下文（主题 + PPT内容），让评委围绕汇报提问
+      const { topic: currentTopic, pptContent: currentPptContent } = useSessionStore.getState();
+      const context = { topic: currentTopic, pptContent: currentPptContent };
+
       if (isApiConfigured()) {
-        response = await callApi(nextAgentId, text.trim(), allMessages);
+        response = await callApi(nextAgentId, allMessages, context);
       }
-      
+
       if (!response) {
         response = await getJudgeResponse(nextAgentId, text.trim(), allMessages);
       }
@@ -101,17 +112,23 @@ export function useChat() {
     }
   }, [messages, lastAgentId, isLoading, addMessage, setIsLoading, setLastAgentId]);
 
-  // 结束答辩，生成报告
-  const endSession = useCallback(() => {
+  // 结束答辩，生成报告（API模式下先尝试真实AI评估，失败则回退Mock）
+  const endSession = useCallback(async () => {
     stopTimer();
     setPhase('finished');
 
-    const minutes = Math.floor(elapsedSeconds / 60);
-    const seconds = elapsedSeconds % 60;
-    const duration = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const duration = formatDuration(elapsedSeconds);
 
-    const report = generateMockReport(messages, duration);
-    setReport(report);
+    if (isApiConfigured()) {
+      const apiReport = await generateReportViaApi(messages, duration);
+      if (apiReport) {
+        setReport(apiReport);
+        return;
+      }
+      console.warn('API报告生成失败，回退到Mock报告');
+    }
+
+    setReport(generateMockReport(messages, duration));
   }, [stopTimer, setPhase, elapsedSeconds, messages, setReport]);
 
   // 重新开始

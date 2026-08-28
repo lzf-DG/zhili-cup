@@ -5,6 +5,7 @@ import { DialogBox } from './components/DialogBox';
 import { Timer } from './components/Timer';
 import { MicButton } from './components/MicButton';
 import { AnswerBox } from './components/AnswerBox';
+import { TextInput } from './components/TextInput';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { ReportView } from './components/ReportView';
@@ -15,7 +16,7 @@ import { getAgentInfo } from './agents/agentManager';
 
 function App() {
   const [showSettings, setShowSettings] = useState(false);
-  const { messages, isLoading, phase, topic, pptContent, startSession, sendMessage, endSession, restart } = useChat();
+  const { messages, isLoading, phase, topic, startSession, sendMessage, endSession, restart } = useChat();
   const lastAgentId = useSessionStore((s) => s.lastAgentId);
   const report = useSessionStore((s) => s.report);
   const slides = useSessionStore((s) => s.slides);
@@ -42,6 +43,49 @@ function App() {
         />
         <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
       </>
+    );
+  }
+
+  // 复盘报告生成中（API模式下异步生成）
+  if (phase === 'finished' && !report) {
+    return (
+      <div style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundImage: 'url(/assets/report-bg.png)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+      }}>
+        <div style={{
+          background: 'rgba(0,0,0,0.5)',
+          backdropFilter: 'blur(8px)',
+          borderRadius: '20px',
+          border: '1px solid rgba(255,213,79,0.3)',
+          padding: '30px 44px',
+          textAlign: 'center',
+        }}>
+          <div style={{
+            width: '10px',
+            height: '10px',
+            borderRadius: '50%',
+            background: '#FFD54F',
+            margin: '0 auto 14px',
+            animation: 'blink-cursor 1s ease-in-out infinite',
+          }} />
+          <p style={{
+            color: 'rgba(255,255,255,0.8)',
+            fontSize: '14px',
+            letterSpacing: '2px',
+            margin: 0,
+          }}>
+            正在生成复盘报告...
+          </p>
+        </div>
+      </div>
     );
   }
 
@@ -119,7 +163,7 @@ function App() {
         <div ref={chatEndRef} />
       </div>
 
-      {/* 回答框 - 评委提问后显示（纯录音模式） */}
+      {/* 回答框 - 评委提问后显示（语音回答，文字输入见底部操作栏） */}
       {!isLoading && lastJudgeMsg && lastJudgeAgent && (
         <AnswerBox
           questionText={lastJudgeMsg.content}
@@ -145,6 +189,11 @@ function App() {
       }}>
         {/* 麦克风按钮 - 自由发言模式 */}
         <MicButton onResult={sendMessage} disabled={isLoading} />
+
+        {/* 文字输入框 - 语音识别的fallback */}
+        <div style={{ flex: 1, maxWidth: '440px' }}>
+          <TextInput onSend={sendMessage} disabled={isLoading} placeholder="输入你的回答..." />
+        </div>
 
         {/* 结束按钮 */}
         <button

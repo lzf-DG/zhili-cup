@@ -331,87 +331,124 @@ app.post('/api/convert-ppt', async (req, res) => {
   });
 });
 
-// POST /api/chat - 评委回复接口（预留真实API调用）
+// POST /api/chat - 评委回复接口（代理转发到用户配置的第三方API）
+// 前端在未配置API时使用本地Mock，不会走到此端点
 app.post('/api/chat', async (req, res) => {
-  const { agentId, userMessage, messages, apiConfig } = req.body;
+  const { agentId, messages, apiConfig } = req.body;
 
-  // 如果提供了API配置，调用真实API
-  if (apiConfig?.baseUrl && apiConfig?.apiKey) {
-    try {
-      const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiConfig.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: apiConfig.model || 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: `你是${agentId}评委，请针对学生的回答进行追问或点评。` },
-            ...(messages || []).slice(-10).map((m: any) => ({
-              role: m.role === 'judge' ? 'assistant' : 'user',
-              content: m.content,
-            })),
-            { role: 'user', content: userMessage },
-          ],
-          max_tokens: 200,
-          temperature: 0.8,
-        }),
-      });
-
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-      return res.json({ agentId, content: content || '（API调用失败）' });
-    } catch (error) {
-      console.error('API调用失败:', error);
-    }
+  if (!apiConfig?.baseUrl || !apiConfig?.apiKey) {
+    return res.status(503).json({ error: 'API未配置，请在设置中填写API信息' });
   }
 
-  // Mock模式：返回模拟回复
-  const mockResponses: Record<string, string[]> = {
-    profWang: [
-      '你这个数据的样本量是多少？有没有考虑过统计显著性的问题？',
-      '你的实验设计中，控制变量是怎么设置的？',
-      '这个结论是不是过于武断了？',
-    ],
-    profLi: [
-      '你的研究出发点很有意思，能再展开讲讲吗？',
-      '这个方案如果应用到其他领域，你觉得最大的挑战是什么？',
-      '从长远来看，你觉得下一步应该怎么做？',
-    ],
-    studentZhang: [
-      '我没太听懂那个技术细节，能用更简单的话解释一下吗？',
-      '这个东西对我们日常生活有什么帮助吗？',
-      '你的核心贡献用一句话概括是什么？',
-    ],
-  };
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: '缺少对话内容' });
+  }
 
-  const responses = mockResponses[agentId] || mockResponses.profWang;
-  const randomIdx = Math.floor(Math.random() * responses.length);
-  
-  // 模拟延迟
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  res.json({ agentId, content: responses[randomIdx] });
+  try {
+    console.log(`[chat] 调用第三方API (${apiConfig.model || 'default'})，评委: ${agentId}`);
+    const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiConfig.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: apiConfig.model || 'gpt-4o-mini',
+        messages: messages.slice(-12),
+        max_tokens: 300,
+        temperature: 0.8,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('第三方API返回错误:', response.status);
+      return res.status(502).json({ error: `第三方API错误 ${response.status}` });
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      return res.status(502).json({ error: 'API返回内容为空' });
+    }
+    return res.json({ content });
+  } catch (error) {
+    console.error('API调用失败:', error);
+    return res.status(500).json({ error: 'API调用异常' });
+  }
 });
 
-// POST /api/report - 生成复盘报告（预留）
+// POST /api/report - 生成复盘报告（代理转发到用户配置的第三方API）
 app.post('/api/report', async (req, res) => {
-  const { messages, duration } = req.body;
-  
-  // Mock报告数据
-  res.json({
-    overallScore: 75,
-    logicScore: 70,
-    contentScore: 78,
-    expressionScore: 80,
-    timeScore: 72,
-    totalMessages: messages?.length || 0,
-    duration: duration || '00:00',
-    highlights: ['汇报结构较为清晰', '能够针对评委问题进行回应', '展示了较好的专业素养'],
-    improvements: ['建议在数据支撑方面做更充分的准备', '回答时可以更多使用具体案例', '注意控制每轮回答的时间'],
-    dialogueSummary: [],
-  });
+  const { dialogueText, duration, apiConfig } = req.body;
+
+  if (!apiConfig?.baseUrl || !apiConfig?.apiKey) {
+    return res.status(503).json({ error: 'API未配置，请在设置中填写API信息' });
+  }
+
+  const prompt = `请根据以下答辩模拟对话记录，生成一份结构化的复盘报告。
+报告需要包含：
+1. 总体评分（0-100）
+2. 逻辑连贯性评分
+3. 内容完整度评分
+4. 表达质量评分
+5. 时间管理评分
+6. 亮点（3条）
+7. 改进建议（4条）
+8. 每轮问答的简要点评
+
+对话记录：
+${dialogueText}
+
+答辩时长：${duration}
+
+请以JSON格式返回（不要包含markdown代码块），字段如下：
+{
+  "overallScore": 0-100整数,
+  "logicScore": 0-100整数,
+  "contentScore": 0-100整数,
+  "expressionScore": 0-100整数,
+  "timeScore": 0-100整数,
+  "highlights": ["亮点1", "亮点2", "亮点3"],
+  "improvements": ["建议1", "建议2", "建议3", "建议4"],
+  "dialogueSummary": [
+    {"agentName": "评委姓名", "question": "问题", "userResponse": "学生回答", "feedback": "点评"}
+  ]
+}`;
+
+  try {
+    console.log('[report] 调用第三方API生成复盘报告');
+    const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiConfig.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: apiConfig.model || 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: '你是一位答辩模拟评估专家，擅长分析学生的答辩表现并给出专业评价。' },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 1500,
+        temperature: 0.5,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('第三方API返回错误:', response.status);
+      return res.status(502).json({ error: `第三方API错误 ${response.status}` });
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      return res.status(502).json({ error: 'API返回内容为空' });
+    }
+    return res.json({ content });
+  } catch (error) {
+    console.error('报告生成失败:', error);
+    return res.status(500).json({ error: '报告生成异常' });
+  }
 });
 
 app.listen(PORT, () => {

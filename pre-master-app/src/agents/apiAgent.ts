@@ -1,7 +1,8 @@
-// 真实API调用预留接口
+// 真实API调用模块
 // 当用户配置了API Key后，使用此模块替代mockAgents中的调用
+// 所有请求经本地后端代理（/api），避免浏览器直连第三方API的CORS问题与密钥暴露
 
-import { ChatMessage } from './types';
+import { ChatMessage, ReportData } from './types';
 import { agents } from './mockAgents';
 
 interface ApiConfig {
@@ -10,59 +11,67 @@ interface ApiConfig {
   model: string;
 }
 
+// 答辩上下文：用于让评委了解主题与PPT内容
+export interface DefenseContext {
+  topic?: string;
+  pptContent?: string;
+}
+
 function getApiConfig(): ApiConfig | null {
   const baseUrl = localStorage.getItem('api_base_url');
   const apiKey = localStorage.getItem('api_key');
   const model = localStorage.getItem('api_model') || 'gpt-4o-mini';
-  
+
   if (!baseUrl || !apiKey) return null;
   return { baseUrl, apiKey, model };
 }
 
-// 构建System Prompt
-function buildSystemPrompt(agentId: string, history: ChatMessage[]): string {
+// 构建System Prompt（注入评委人格 + 答辩主题 + PPT内容）
+function buildSystemPrompt(agentId: string, context?: DefenseContext): string {
   const agent = agents[agentId];
   if (!agent) return '';
-  
+
   let prompt = agent.systemPrompt;
   prompt += '\n\n当前是答辩模拟场景，你需要作为评委对学生进行提问和点评。';
+
+  if (context?.topic) {
+    prompt += `\n\n学生答辩主题：「${context.topic}」。`;
+  }
+
+  if (context?.pptContent) {
+    prompt += `\n\n学生PPT内容摘要：\n${context.pptContent.slice(0, 3000)}`;
+    prompt += '\n\n请基于PPT内容提问，追问数据依据、方法细节、逻辑漏洞等，不要问与汇报内容无关的泛泛问题。';
+  }
+
   prompt += '\n请保持你的角色特点，回复简洁有力。';
-  
   return prompt;
 }
 
-// 调用OpenAI兼容API
+// 调用OpenAI兼容API（经本地后端代理转发）
 export async function callApi(
   agentId: string,
-  userMessage: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  context?: DefenseContext
 ): Promise<{ agentId: string; content: string } | null> {
   const config = getApiConfig();
   if (!config) return null;
 
   try {
-    // 构建消息历史（只保留最近10条）
+    // 构建消息历史（只保留最近10条，最后一条即用户本次回答，无需重复追加）
     const recentMessages = messages.slice(-10).map(m => ({
       role: m.role === 'judge' ? 'assistant' as const : m.role === 'user' ? 'user' as const : 'system' as const,
       content: m.content,
     }));
 
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    const payload = [
+      { role: 'system' as const, content: buildSystemPrompt(agentId, context) },
+      ...recentMessages,
+    ];
+
+    const response = await fetch('/api/chat', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: buildSystemPrompt(agentId, messages) },
-          ...recentMessages,
-          { role: 'user', content: userMessage },
-        ],
-        max_tokens: 200,
-        temperature: 0.8,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, messages: payload, apiConfig: config }),
     });
 
     if (!response.ok) {
@@ -71,10 +80,10 @@ export async function callApi(
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    
+    const content = data.content;
+
     if (!content) return null;
-    
+
     return { agentId, content };
   } catch (error) {
     console.error('API调用异常:', error);
@@ -82,11 +91,62 @@ export async function callApi(
   }
 }
 
-// 生成复盘报告（调用API）
+// 解析API返回的报告JSON（容错：剥离markdown代码块、只取首个JSON对象）
+function parseReportJson(
+  content: string,
+  totalMessages: number,
+  duration: string
+): ReportData | null {
+  let jsonStr = content.trim();
+  const fence = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) jsonStr = fence[1].trim();
+
+  const start = jsonStr.indexOf('{');
+  const end = jsonStr.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  try {
+    const obj = JSON.parse(jsonStr.slice(start, end + 1));
+
+    const clampScore = (v: unknown, fallback: number): number =>
+      typeof v === 'number' && isFinite(v)
+        ? Math.round(Math.max(0, Math.min(100, v)))
+        : fallback;
+
+    const toStringArray = (v: unknown, fallback: string[]): string[] =>
+      Array.isArray(v) && v.length > 0 ? v.map(String) : fallback;
+
+    const dialogueSummary = Array.isArray(obj.dialogueSummary)
+      ? obj.dialogueSummary.map((s: any) => ({
+          agentName: String(s?.agentName || '评委'),
+          question: String(s?.question || ''),
+          userResponse: String(s?.userResponse || '（未回答）'),
+          feedback: String(s?.feedback || ''),
+        }))
+      : [];
+
+    return {
+      overallScore: clampScore(obj.overallScore, 75),
+      logicScore: clampScore(obj.logicScore, 70),
+      contentScore: clampScore(obj.contentScore, 75),
+      expressionScore: clampScore(obj.expressionScore, 75),
+      timeScore: clampScore(obj.timeScore, 75),
+      totalMessages,
+      duration,
+      highlights: toStringArray(obj.highlights, ['汇报结构较为清晰', '能够针对评委问题进行回应']),
+      improvements: toStringArray(obj.improvements, ['建议在数据支撑方面做更充分的准备', '回答时可以更多使用具体案例']),
+      dialogueSummary,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// 生成复盘报告（调用API，经本地后端代理转发）
 export async function generateReportViaApi(
   messages: ChatMessage[],
   duration: string
-): Promise<string | null> {
+): Promise<ReportData | null> {
   const config = getApiConfig();
   if (!config) return null;
 
@@ -94,45 +154,20 @@ export async function generateReportViaApi(
     .map(m => `[${m.agentName || '用户'}]: ${m.content}`)
     .join('\n');
 
-  const prompt = `请根据以下答辩模拟对话记录，生成一份结构化的复盘报告。
-报告需要包含：
-1. 总体评分（0-100）
-2. 逻辑连贯性评分
-3. 内容完整度评分
-4. 表达质量评分
-5. 时间管理评分
-6. 亮点（3条）
-7. 改进建议（4条）
-8. 每轮问答的简要点评
-
-对话记录：
-${dialogueText}
-
-答辩时长：${duration}
-
-请以JSON格式返回。`;
-
   try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    const response = await fetch('/api/report', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: '你是一位答辩模拟评估专家，擅长分析学生的答辩表现并给出专业评价。' },
-          { role: 'user', content: prompt },
-        ],
-        max_tokens: 1500,
-        temperature: 0.5,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dialogueText, duration, apiConfig: config }),
     });
 
     if (!response.ok) return null;
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || null;
+    const content = data.content;
+
+    if (!content) return null;
+
+    return parseReportJson(content, messages.length, duration);
   } catch {
     return null;
   }
