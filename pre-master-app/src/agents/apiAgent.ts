@@ -177,6 +177,51 @@ export async function generateReportViaApi(
   }
 }
 
+// 将后端/第三方API错误映射为面向用户的可读提示（不暴露密钥）
+function mapApiError(error: unknown, status: number): string {
+  const e = String(error || '');
+  if (status === 502) {
+    if (e.includes('401')) return 'API Key 无效或已过期（第三方返回401）';
+    if (e.includes('404')) return 'Base URL 或模型不存在（第三方返回404）';
+    if (e.includes('429')) return '请求超限或额度不足（第三方返回429），请稍后重试';
+    return e ? `第三方API错误：${e}` : '第三方API调用失败，请检查 Base URL';
+  }
+  if (status === 503) return '后端未收到API配置，请重新填写并保存';
+  return '后端服务可能未启动（端口3001）或调用异常，请检查后重试';
+}
+
+// 验证API配置是否有效：发送一次最小请求，经本地后端代理转发到第三方API
+// 成功返回 ok=true；失败返回可读的错误原因
+export async function validateApiConfig(config?: ApiConfig): Promise<{ ok: boolean; message: string }> {
+  const cfg = config ?? getApiConfig();
+  if (!cfg || !cfg.baseUrl || !cfg.apiKey) {
+    return { ok: false, message: '请先填写 Base URL 和 API Key' };
+  }
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'validate',
+        messages: [{ role: 'user' as const, content: '你好' }],
+        apiConfig: cfg,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return { ok: false, message: mapApiError((data as any).error, response.status) };
+    }
+
+    const data = await response.json();
+    if (!data.content) return { ok: false, message: 'API返回内容为空，请检查模型配置' };
+    return { ok: true, message: '配置成功，已接入真实AI' };
+  } catch {
+    return { ok: false, message: '无法连接本地后端服务，请先启动后端（端口3001）' };
+  }
+}
+
 // 检查API是否已配置
 export function isApiConfigured(): boolean {
   return getApiConfig() !== null;
