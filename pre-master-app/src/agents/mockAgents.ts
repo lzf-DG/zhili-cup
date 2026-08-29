@@ -130,13 +130,51 @@ const vagueQuestions = [
   '请说得更明确一些，你的核心结论到底是什么？',
 ];
 
-// 轮询索引：题库与关键词追问池各自循环，避免机械重复
-const questionIndex: Record<string, number> = {
-  profWang: 0,
-  profLi: 0,
-  studentZhang: 0,
-};
-const followUpIndex: Record<string, number> = {};
+// ===== 跨评委提问去重 =====
+// 关键词追问池与含糊追问池在三位评委间共用，旧实现按评委各自轮询，
+// 导致不同评委问出逐字相同的问题。现改为全局记录已问问题：
+// 优先选未被问过的；全部问过后，用字符二元组相似度对「极近似」的
+// 已问问题降权，减少评委之间与轮次之间的提问重叠。
+const askedQuestions: string[] = [];
+
+// 取字符二元组集合（去标点），用于衡量近似程度
+function charBigrams(text: string): Set<string> {
+  const t = (text || '').replace(/[^0-9a-zA-Z一-龥]/g, '');
+  const set = new Set<string>();
+  for (let i = 0; i + 1 < t.length; i++) set.add(t.slice(i, i + 2));
+  return set;
+}
+
+// 候选问题与所有已问问题的最大 Jaccard 相似度（0~1）
+function maxSimilarity(candidate: string, asked: string[]): number {
+  const bg = charBigrams(candidate);
+  if (bg.size === 0) return 0;
+  let max = 0;
+  for (const a of asked) {
+    const ab = charBigrams(a);
+    let inter = 0;
+    for (const b of bg) if (ab.has(b)) inter++;
+    const union = bg.size + ab.size - inter;
+    if (union > 0 && inter / union > max) max = inter / union;
+  }
+  return max;
+}
+
+// 从池中选题：被问次数越多、与已问问题越近似，优先级越低
+function pickQuestion(pool: string[]): string {
+  let best = pool[0];
+  let bestCost = Infinity;
+  for (const q of pool) {
+    const askedTimes = askedQuestions.filter((a) => a === q).length;
+    const cost = askedTimes * 1.5 + maxSimilarity(q, askedQuestions);
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = q;
+    }
+  }
+  askedQuestions.push(best);
+  return best;
+}
 
 // 识别回答内容所属的追问方向
 function detectCategory(answer: string): FollowUpCategory {
@@ -184,26 +222,17 @@ function generateFeedback(agent: Agent, answer: string, category: FollowUpCatego
   return '明白了，那我再问一个问题。';
 }
 
-// 基于回答内容的追问
+// 基于回答内容的追问（跨评委去重：避免重复/极近似问题）
 function generateFollowUp(agent: Agent, answer: string, category: FollowUpCategory): string {
   if (category === 'vague') {
-    const key = `${agent.id}:vague`;
-    const i = followUpIndex[key] || 0;
-    followUpIndex[key] = i + 1;
-    return vagueQuestions[i % vagueQuestions.length];
+    return pickQuestion(vagueQuestions);
   }
   const pool = keywordFollowUps.find((k) => k.category === category)?.questions;
   if (pool) {
-    const key = `${agent.id}:${category}`;
-    const i = followUpIndex[key] || 0;
-    followUpIndex[key] = i + 1;
-    return pool[i % pool.length];
+    return pickQuestion(pool);
   }
-  // 未命中关键词时，回退到该评委的固定题库（轮询）
-  const questions = mockQuestions[agent.id] || mockQuestions.profWang;
-  const idx = questionIndex[agent.id] || 0;
-  questionIndex[agent.id] = idx + 1;
-  return questions[idx % questions.length];
+  // 未命中关键词时，回退到该评委的固定题库
+  return pickQuestion(mockQuestions[agent.id] || mockQuestions.profWang);
 }
 
 // 用户反问时的澄清回复：评委说明自己指的是什么，引导学生展开
@@ -253,14 +282,9 @@ export function getMockResponse(agentId: string, userMessage: string, isHandoff 
   return `${feedback} ${question}`;
 }
 
-// 重置 Mock 状态
+// 重置 Mock 状态（含跨评委提问去重记录）
 export function resetMockState() {
-  questionIndex.profWang = 0;
-  questionIndex.profLi = 0;
-  questionIndex.studentZhang = 0;
-  for (const key of Object.keys(followUpIndex)) {
-    delete followUpIndex[key];
-  }
+  askedQuestions.length = 0;
 }
 
 // 生成Mock复盘报告
