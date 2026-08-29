@@ -7,11 +7,17 @@
  *
  * 坐标与单位约定（pptx-parser 已统一换算）：
  *   - position / size / pageSize 均为 px（96dpi）
- *   - fontSize.value 实际为「磅」（pt），CSS 中需 × 96/72
+ *   - fontSize.value 已是 px（96dpi）：parser 内部用 96*t/72 把 pt 换算成 px，
+ *     渲染时只需再 × 容器缩放比例，不能再乘 96/72
+ *   - lineSpacing：unit 为 PERCENTAGE 时 value 是小数（1.2 = 120% 行距）；
+ *     unit 为 PX 时 value 是固定行高 px（96dpi）
+ *   - letterSpacing：unit 为 PERCENTAGE，value 是相对字号的小数（0.05 = 字距 +5%）
  *   - rotate 为角度（度），flipH / flipV 为布尔
  *   - 颜色：形状/文字为不带 `#` 的 6 位 hex（如 "FF0000"），
  *     页面背景为 tinycolor 的 "rgb(...)" 字符串 —— 由 toCssColor 统一处理
  *   - image.contentUrl 为 base64 data URL，可直接用于 <img src>
+ *   - 注意：parser 的自定义 XML 解析器不解码字符引用，<a:t> 里的
+ *     &#10; 等会原样残留在 content 中，渲染前需经 decodePptxText 处理
  */
 
 export interface PxValue {
@@ -136,6 +142,48 @@ export interface PptxStructure {
   pageSize: PptxSize;
   slides: PptxSlide[];
   title?: string;
+}
+
+/**
+ * 解码 PPTX 文本中残留的 XML 字符引用。
+ *
+ * pptx-parser 的自定义 XML 解析器不处理实体：部分 .pptx 在 <a:t> 里
+ * 用 &#10; / &#xA; / &amp; 等形式内嵌换行与特殊字符，解析后 content
+ * 会残留字面量（渲染出来就是一串 "&#10;"）。这里统一还原为真实字符。
+ *
+ * 解码顺序有讲究：
+ *   1. 数字引用（十进制 &#10; 与十六进制 &#xA;）
+ *   2. 命名引用（&lt; &gt; &quot; &apos;），但 &amp; 先跳过
+ *   3. 最后解 &amp; —— 否则 "&amp;#10;" 会被二次解码成换行
+ */
+const NAMED_ENTITIES: Record<string, string> = {
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+/** 数字字符引用 → 真实字符；控制字符做归一化，避免渲染出乱码 */
+function charFromCodePoint(code: number): string {
+  if (!isFinite(code) || code <= 0) return '';
+  if (code === 9) return '\t';
+  // 换行/垂直制表/换页/回车 统一为 \n（whiteSpace: pre-wrap 下显示为换行）
+  if (code === 10 || code === 11 || code === 12 || code === 13) return '\n';
+  if (code < 32 || code === 127) return ''; // 其余不可见控制字符丢弃
+  return String.fromCharCode(code);
+}
+
+export function decodePptxText(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/&#x([0-9a-fA-F]+);?/gi, (_, hex: string) =>
+      charFromCodePoint(parseInt(hex, 16))
+    )
+    .replace(/&#(\d+);?/g, (_, dec: string) => charFromCodePoint(parseInt(dec, 10)))
+    .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (match, name: string) =>
+      name === 'amp' ? match : (NAMED_ENTITIES[name] ?? match)
+    )
+    .replace(/&amp;/g, '&');
 }
 
 /** pt → px（96dpi） */
