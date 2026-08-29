@@ -24,8 +24,10 @@ export const DialogBox: React.FC<DialogBoxProps> = ({
 
   const agent = agentId ? getAgentInfo(agentId) : null;
 
-  // 打字机效果
+  // 打字机效果 - 仅评委消息使用；用户自己的消息直接完整显示，避免逐字生长导致被顶出视口
   useEffect(() => {
+    if (isUser) return;
+
     const delayTimer = setTimeout(() => {
       indexRef.current = 0;
       setDisplayedText('');
@@ -39,13 +41,13 @@ export const DialogBox: React.FC<DialogBoxProps> = ({
           clearInterval(interval);
           setIsTypingDone(true);
         }
-      }, 35);
+      }, 12);
 
       return () => clearInterval(interval);
     }, delay);
 
     return () => clearTimeout(delayTimer);
-  }, [text, delay]);
+  }, [text, delay, isUser]);
 
   if (isUser) {
     // 用户消息：底部居中，简洁风格
@@ -68,18 +70,7 @@ export const DialogBox: React.FC<DialogBoxProps> = ({
           wordBreak: 'break-word',
         }}
       >
-        {displayedText}
-        {!isTypingDone && (
-          <span style={{
-            display: 'inline-block',
-            width: '2px',
-            height: '14px',
-            background: '#1a1a2e',
-            marginLeft: '2px',
-            verticalAlign: 'middle',
-            animation: 'blink-cursor 0.8s step-end infinite',
-          }} />
-        )}
+        {text}
       </motion.div>
     );
   }

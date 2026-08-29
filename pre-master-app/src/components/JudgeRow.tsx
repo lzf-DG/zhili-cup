@@ -16,12 +16,11 @@ export const JudgeRow: React.FC<JudgeRowProps> = ({ activeAgentId }) => {
 
   return (
     <div style={{
-      position: 'absolute',
-      top: '44%',
-      left: '50%',
-      transform: 'translateX(-50%)',
       display: 'flex',
       gap: '30px',
+      justifyContent: 'center',
+      padding: '8px 0 4px',
+      flexShrink: 0,
       zIndex: 2,
     }}>
       {judgeIds.map((id) => {
@@ -41,8 +40,8 @@ export const JudgeRow: React.FC<JudgeRowProps> = ({ activeAgentId }) => {
             {/* 头像 */}
             <div
               style={{
-                width: '64px',
-                height: '64px',
+                width: '52px',
+                height: '52px',
                 borderRadius: '50%',
                 overflow: 'hidden',
                 border: isActive ? `3px solid ${agent.avatarColor}` : '3px solid rgba(255,255,255,0.15)',
