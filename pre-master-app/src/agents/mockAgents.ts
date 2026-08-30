@@ -253,14 +253,79 @@ const handoffOpeners: Record<string, string> = {
   curious: '嗯，我也有个想问的。',
 };
 
+// 从汇报文本中抽取一个核心短语（用于整体评价里「重复汇报核心观点」）
+// 策略：优先取内容关键词命中的词语，回退到最长的连续中文片段（4-12字）
+function extractCorePhrase(text: string): string {
+  const t = (text || '').replace(/\s+/g, '');
+  if (!t) return '';
+  for (const k of keywordFollowUps) {
+    const m = t.match(k.pattern);
+    if (m && m[0] && m[0].length >= 2) return m[0].slice(0, 12);
+  }
+  const chunks = t.match(/[一-鿿]{4,12}/g);
+  if (chunks && chunks.length) {
+    let best = chunks[0];
+    for (const c of chunks) if (c.length > best.length) best = c;
+    return best;
+  }
+  return '';
+}
+
+// 结束汇报后的整体评价：20-50字，正面表扬 + 概括汇报核心观点，
+// 模拟真实答辩「评委先总评、后提问」的节奏（由当前评委——通常是王教授——执行）
+function generateReportEvaluation(reportText: string, topic?: string): string {
+  const t = (reportText || '').trim();
+
+  // 无汇报内容：给一段简短总评，直接衔接提问（不做空洞表扬）
+  if (!t) {
+    const pool = [
+      '刚才没有听到具体的汇报内容，我们直接进入提问环节，检验你的临场发挥。',
+      '汇报环节到此结束，我做个简单小结，接下来直接开始提问。',
+    ];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  // 核心观点：优先取答辩主题，其次从汇报内容中抽取一个关键短语
+  const core = topic?.trim() || extractCorePhrase(t);
+  if (!core) {
+    const pool = [
+      '整体来看，你的汇报结构清晰、思路完整，展现了不错的专业素养。',
+      '汇报整体完成度不错，逻辑主线清楚，看得出做了充分准备。',
+    ];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  const pool = [
+    `汇报整体流畅，核心观点「${core}」表达得很清楚，重点突出，完成度很高。`,
+    `你围绕「${core}」的阐述逻辑清晰、层次分明，整体表现可圈可点。`,
+    `整体评价不错，尤其「${core}」部分讲得比较到位，体现了一定的研究深度。`,
+  ];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 // 获取 Mock 回复：
+// - 结束汇报（isReportEvaluation）→ 先给 20-50 字整体评价，再抛出第一个问题
 // - 用户反问/求澄清 → 同一评委澄清（一对一延续）
 // - 无回答内容（空汇报结束）→ 直接抛出第一个问题
 // - 换人进场（isHandoff）→ 新评委开新提问线
 // - 其余 → 点评 + 追问
-export function getMockResponse(agentId: string, userMessage: string, isHandoff = false): string {
+export function getMockResponse(
+  agentId: string,
+  userMessage: string,
+  isHandoff = false,
+  isReportEvaluation = false,
+  topic?: string
+): string {
   const agent = agents[agentId] || agents.profWang;
   const answer = (userMessage || '').trim();
+
+  // 结束汇报：先总评（20-50字），再衔接第一个问题
+  if (isReportEvaluation) {
+    const evaluation = generateReportEvaluation(answer, topic);
+    const category = answer ? detectCategory(answer) : 'generic';
+    const question = generateFollowUp(agent, answer, category);
+    return `${evaluation}${question}`;
+  }
 
   if (isClarifyingQuestion(answer)) {
     return generateClarification(agent);

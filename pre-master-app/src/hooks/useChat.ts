@@ -61,7 +61,12 @@ export function useChat() {
 
   // 请求评委回复（共用路径：选择评委 → 优先API → Mock兜底 → 追加回复）
   // userText：供 Mock 基于内容追问；结束汇报反馈时传完整汇报文本
-  const requestJudgeReply = useCallback(async (allMessages: ChatMessage[], userText: string) => {
+  // options.isReportEvaluation：true 时评委先给 20-50 字整体评价（王教授总评），再抛第一个问题
+  const requestJudgeReply = useCallback(async (
+    allMessages: ChatMessage[],
+    userText: string,
+    options?: { isReportEvaluation?: boolean }
+  ) => {
     setIsLoading(true);
     try {
       // 选择下一个评委（会话延续优先：默认同一评委继续，一对一深聊）
@@ -77,11 +82,18 @@ export function useChat() {
       const context = { topic: currentTopic, pptContent: currentPptContent };
 
       if (isApiConfigured()) {
-        response = await callApi(nextAgentId, allMessages, context);
+        response = await callApi(nextAgentId, allMessages, context, options?.isReportEvaluation);
       }
 
       if (!response) {
-        response = await getJudgeResponse(nextAgentId, userText, allMessages, isHandoff);
+        response = await getJudgeResponse(
+          nextAgentId,
+          userText,
+          allMessages,
+          isHandoff,
+          options?.isReportEvaluation,
+          currentTopic
+        );
       }
 
       // 添加评委回复（以实际应答的评委为准）
@@ -124,7 +136,7 @@ export function useChat() {
     await requestJudgeReply([...messages, userMsg], text.trim());
   }, [messages, isLoading, addMessage, requestJudgeReply]);
 
-  // 结束汇报：切换到答辩阶段，评委基于汇报内容给出第一轮反馈
+  // 结束汇报：切换到答辩阶段，评委基于汇报内容先给出整体评价（王教授总评），再抛出第一个问题
   const endReport = useCallback(async () => {
     const state = useSessionStore.getState();
     if (state.phase !== 'reporting' || state.isLoading) return;
@@ -137,7 +149,7 @@ export function useChat() {
       .join('')
       .trim();
 
-    await requestJudgeReply(state.messages, reportText);
+    await requestJudgeReply(state.messages, reportText, { isReportEvaluation: true });
   }, [setPhase, requestJudgeReply]);
 
   // 结束答辩，生成报告（API模式下先尝试真实AI评估，失败则回退Mock）

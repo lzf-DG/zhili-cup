@@ -62,12 +62,14 @@ export async function getJudgeResponse(
   agentId: string,
   userMessage: string,
   _messages: ChatMessage[],
-  isHandoff = false
+  isHandoff = false,
+  isReportEvaluation = false,
+  topic?: string
 ): Promise<{ agentId: string; content: string }> {
   // 模拟网络延迟
   await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 1200));
 
-  const content = getMockResponse(agentId, userMessage, isHandoff);
+  const content = getMockResponse(agentId, userMessage, isHandoff, isReportEvaluation, topic);
   return { agentId, content };
 }
 

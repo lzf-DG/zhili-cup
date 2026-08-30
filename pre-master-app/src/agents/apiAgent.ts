@@ -27,7 +27,7 @@ function getApiConfig(): ApiConfig | null {
 }
 
 // 构建System Prompt（注入评委人格 + 答辩主题 + PPT内容）
-function buildSystemPrompt(agentId: string, context?: DefenseContext): string {
+function buildSystemPrompt(agentId: string, context?: DefenseContext, isReportEvaluation = false): string {
   const agent = agents[agentId];
   if (!agent) return '';
 
@@ -49,6 +49,11 @@ function buildSystemPrompt(agentId: string, context?: DefenseContext): string {
     '\n重要：这是多轮交互，不要机械地按顺序抛固定问题。每次都要先简短点评学生上一轮回答的实际内容（哪些地方好、哪些地方有问题），再基于其回答内容自然追问，形成真正的对话；如果学生回答含糊或未正面作答，先要求其澄清或补充。';
   prompt +=
     '\n注意：对话历史中已包含你和其他评委问过的提问。不要重复或提出与之极相似的问题；某个方向已被问过就问得更深入，或换一个角度。';
+  if (isReportEvaluation) {
+    prompt +=
+      '\n重要：学生刚刚结束汇报。请先给出20-50字的整体评价（正面表扬为主，概括汇报的核心观点，模拟真实答辩中评委的总评环节），紧接着再提出第一个具体问题。整条回复仍然是2-3句话。';
+  }
+
   return prompt;
 }
 
@@ -56,7 +61,8 @@ function buildSystemPrompt(agentId: string, context?: DefenseContext): string {
 export async function callApi(
   agentId: string,
   messages: ChatMessage[],
-  context?: DefenseContext
+  context?: DefenseContext,
+  isReportEvaluation = false
 ): Promise<{ agentId: string; content: string } | null> {
   const config = getApiConfig();
   if (!config) return null;
@@ -69,7 +75,7 @@ export async function callApi(
     }));
 
     const payload = [
-      { role: 'system' as const, content: buildSystemPrompt(agentId, context) },
+      { role: 'system' as const, content: buildSystemPrompt(agentId, context, isReportEvaluation) },
       ...recentMessages,
     ];
 
