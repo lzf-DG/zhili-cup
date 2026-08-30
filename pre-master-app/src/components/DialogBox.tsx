@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { getAgentInfo } from '../agents/agentManager';
 
@@ -20,33 +20,43 @@ export const DialogBox: React.FC<DialogBoxProps> = ({
 }) => {
   const [displayedText, setDisplayedText] = useState('');
   const [isTypingDone, setIsTypingDone] = useState(false);
-  const indexRef = useRef(0);
 
   const agent = agentId ? getAgentInfo(agentId) : null;
 
   // 打字机效果 - 仅评委消息使用；用户自己的消息直接完整显示，避免逐字生长导致被顶出视口
+  // 时间驱动 + 递归定时器：进度按「已过毫秒数」计算而非累加计数。定时器被浏览器节流
+  // 或丢失时，下次触发会直接追平到完整文本，绝不会停在半句话上；delay 与打字定时器
+  // 都在清理函数中一并清除，杜绝 StrictMode 双挂载/重渲染下残留定时器把显示冻结在中间。
   useEffect(() => {
     if (isUser) return;
 
-    const delayTimer = setTimeout(() => {
-      indexRef.current = 0;
-      setDisplayedText('');
-      setIsTypingDone(false);
+    let cancelled = false;
+    let delayTimer: ReturnType<typeof setTimeout> | undefined;
+    let typeTimer: ReturnType<typeof setTimeout> | undefined;
 
-      const interval = setInterval(() => {
-        if (indexRef.current < text.length) {
-          setDisplayedText(text.slice(0, indexRef.current + 1));
-          indexRef.current += 1;
-        } else {
-          clearInterval(interval);
+    const startTyping = () => {
+      const startTime = performance.now();
+      const step = () => {
+        if (cancelled) return;
+        const count = Math.floor((performance.now() - startTime) / 12);
+        if (count >= text.length) {
+          setDisplayedText(text);
           setIsTypingDone(true);
+          return;
         }
-      }, 12);
+        setDisplayedText(text.slice(0, count + 1));
+        typeTimer = setTimeout(step, 12);
+      };
+      step();
+    };
 
-      return () => clearInterval(interval);
-    }, delay);
+    delayTimer = setTimeout(startTyping, delay);
 
-    return () => clearTimeout(delayTimer);
+    return () => {
+      cancelled = true;
+      if (delayTimer !== undefined) clearTimeout(delayTimer);
+      if (typeTimer !== undefined) clearTimeout(typeTimer);
+    };
   }, [text, delay, isUser]);
 
   if (isUser) {
