@@ -2,8 +2,9 @@
 // 当用户配置了API Key后，使用此模块替代mockAgents中的调用
 // 所有请求经本地后端代理（/api），避免浏览器直连第三方API的CORS问题与密钥暴露
 
-import { ChatMessage, ReportData } from './types';
+import { ChatMessage, ReportData, ReportModeData } from './types';
 import { agents } from './mockAgents';
+import { Slide } from '../utils/pptParser';
 
 interface ApiConfig {
   baseUrl: string;
@@ -184,7 +185,96 @@ export async function generateReportViaApi(
   }
 }
 
-// 将后端/第三方API错误映射为面向用户的可读提示（不暴露密钥）
+// 解析汇报模式评价JSON（容错：剥离markdown代码块、只取首个JSON对象）
+function parseReportModeJson(
+  content: string,
+  totalMessages: number,
+  duration: string
+): ReportModeData | null {
+  let jsonStr = content.trim();
+  const fence = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) jsonStr = fence[1].trim();
+
+  const start = jsonStr.indexOf('{');
+  const end = jsonStr.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  try {
+    const obj = JSON.parse(jsonStr.slice(start, end + 1));
+
+    const clampScore = (v: unknown, fallback: number): number =>
+      typeof v === 'number' && isFinite(v)
+        ? Math.round(Math.max(0, Math.min(100, v)))
+        : fallback;
+
+    const toStringArray = (v: unknown, fallback: string[]): string[] =>
+      Array.isArray(v) && v.length > 0 ? v.map(String) : fallback;
+
+    return {
+      overallScore: clampScore(obj.overallScore, 75),
+      accuracyScore: clampScore(obj.accuracyScore, 75),
+      completenessScore: clampScore(obj.completenessScore, 75),
+      coherenceScore: clampScore(obj.coherenceScore, 75),
+      clarityScore: clampScore(obj.clarityScore, 75),
+      engagementScore: clampScore(obj.engagementScore, 75),
+      accuracyComment: String(obj.accuracyComment || ''),
+      completenessComment: String(obj.completenessComment || ''),
+      coherenceComment: String(obj.coherenceComment || ''),
+      clarityComment: String(obj.clarityComment || ''),
+      engagementComment: String(obj.engagementComment || ''),
+      duration,
+      totalMessages,
+      summary: String(obj.summary || ''),
+      highlights: toStringArray(obj.highlights, []),
+      improvements: toStringArray(obj.improvements, []),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// 生成汇报模式评价（调用API，经本地后端代理转发）
+export async function generateReportModeReportViaApi(
+  reportText: string,
+  topic: string,
+  pptContent: string,
+  slides: Slide[],
+  duration: string
+): Promise<ReportModeData | null> {
+  const config = getApiConfig();
+  if (!config) return null;
+
+  const slideText = (slides || [])
+    .map(s => s.title || s.content || '')
+    .filter(Boolean)
+    .join('\n');
+  const pptText = [pptContent, slideText].filter(Boolean).join('\n');
+
+  try {
+    const response = await fetch('/api/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'report',
+        reportText,
+        topic,
+        pptContent: pptText,
+        duration,
+        apiConfig: config,
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    const content = data.content;
+
+    if (!content) return null;
+
+    return parseReportModeJson(content, 1, duration);
+  } catch {
+    return null;
+  }
+}
 function mapApiError(error: unknown, status: number): string {
   const e = String(error || '');
   if (status === 502) {

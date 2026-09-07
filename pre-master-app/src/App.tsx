@@ -9,6 +9,7 @@ import { TextInput } from './components/TextInput';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { ReportView } from './components/ReportView';
+import { ReportModeEnd } from './components/ReportModeEnd';
 import { PptViewer } from './components/PptViewer';
 import { useChat } from './hooks/useChat';
 import { useSessionStore } from './store/sessionStore';
@@ -21,7 +22,9 @@ function App() {
   const { messages, isLoading, phase, topic, startSession, sendMessage, endReport, endSession, restart } = useChat();
   const lastAgentId = useSessionStore((s) => s.lastAgentId);
   const clearMessages = useSessionStore((s) => s.clearMessages);
+  const mode = useSessionStore((s) => s.mode);
   const report = useSessionStore((s) => s.report);
+  const reportModeReport = useSessionStore((s) => s.reportModeReport);
   const slides = useSessionStore((s) => s.slides);
   const slideImages = useSessionStore((s) => s.slideImages);
   const pptFile = useSessionStore((s) => s.pptFile);
@@ -66,16 +69,63 @@ function App() {
     return (
       <>
         <WelcomeScreen
-          onStart={(t, c, s, i, f) => {
-            // 新一场答辩：投影默认展开
+          onStart={(m, t, c, s, i, f) => {
+            // 新一场会话：投影默认展开
             setPptCollapsed(false);
-            startSession(t, c, s, i, f);
+            startSession(m, t, c, s, i, f);
           }}
           onOpenSettings={() => setShowSettings(true)}
         />
         <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
       </>
     );
+  }
+
+  // 汇报模式结束页（无问答环节，仅展示本次预演 + 表达评价）
+  if (phase === 'finished' && mode === 'report') {
+    // 评价生成中（API模式下异步生成，Mock兜底为同步返回）
+    if (!reportModeReport) {
+      return (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundImage: 'url(/assets/report-bg.png)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}>
+          <div style={{
+            background: 'rgba(0,0,0,0.5)',
+            backdropFilter: 'blur(8px)',
+            borderRadius: '20px',
+            border: '1px solid rgba(255,213,79,0.3)',
+            padding: '30px 44px',
+            textAlign: 'center',
+          }}>
+            <div style={{
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              background: '#FFD54F',
+              margin: '0 auto 14px',
+              animation: 'blink-cursor 1s ease-in-out infinite',
+            }} />
+            <p style={{
+              color: 'rgba(255,255,255,0.8)',
+              fontSize: '14px',
+              letterSpacing: '2px',
+              margin: 0,
+            }}>
+              正在生成表达评价...
+            </p>
+          </div>
+        </div>
+      );
+    }
+    return <ReportModeEnd report={reportModeReport} topic={topic} onRestart={restart} />;
   }
 
   // 复盘报告生成中（API模式下异步生成）
@@ -157,9 +207,30 @@ function App() {
         />
       )}
 
-      {/* 评委席 - 固定在顶部，PPT展开时被覆盖 */}
-      <div style={{ position: 'absolute', top: judgeTop, left: 0, right: 0, zIndex: 20 }}>
-        <JudgeRow activeAgentId={lastAgentId} />
+      {/* 评委席（答辩模式）/ 汇报中状态（汇报模式：无评委） */}
+      <div style={{ position: 'absolute', top: judgeTop, left: 0, right: 0, zIndex: 20, display: 'flex', justifyContent: 'center' }}>
+        {mode === 'report' ? (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '7px 20px',
+            borderRadius: '20px',
+            background: 'rgba(0,0,0,0.5)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(76,175,80,0.4)',
+          }}>
+            <span style={{ fontSize: '16px' }}>🎤</span>
+            <span style={{ color: '#81C784', fontWeight: 700, fontSize: '13px', letterSpacing: '2px' }}>
+              汇报中
+            </span>
+            {topic && (
+              <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>· {topic}</span>
+            )}
+          </div>
+        ) : (
+          <JudgeRow activeAgentId={lastAgentId} />
+        )}
       </div>
 
       {/* 计时器（组件自身 fixed 于右上角） */}
@@ -182,13 +253,26 @@ function App() {
       >
         <div ref={chatContentRef} style={{ display: 'flex', flexDirection: 'column' }}>
           {messages.map((msg) => (
-            <DialogBox
-              key={msg.id}
-              text={msg.content}
-              isUser={msg.role === 'user'}
-              agentId={msg.agentId}
-              agentName={msg.agentName}
-            />
+            msg.role === 'system' ? (
+              <div key={msg.id} style={{
+                textAlign: 'center',
+                padding: '10px 20px',
+                color: 'rgba(255,255,255,0.55)',
+                fontSize: '12px',
+                letterSpacing: '1px',
+                lineHeight: 1.6,
+              }}>
+                {msg.content}
+              </div>
+            ) : (
+              <DialogBox
+                key={msg.id}
+                text={msg.content}
+                isUser={msg.role === 'user'}
+                agentId={msg.agentId}
+                agentName={msg.agentName}
+              />
+            )
           ))}
 
           {/* Loading指示器 */}

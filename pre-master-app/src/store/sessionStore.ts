@@ -1,11 +1,15 @@
 import { create } from 'zustand';
-import { ChatMessage, SessionPhase, ReportData } from '../agents/types';
+import { ChatMessage, SessionPhase, SessionMode, ReportData, ReportModeData } from '../agents/types';
 import { Slide } from '../utils/pptParser';
 
 interface SessionState {
   // 阶段
   phase: SessionPhase;
   setPhase: (phase: SessionPhase) => void;
+
+  // 会话模式（答辩 / 汇报）
+  mode: SessionMode;
+  setMode: (mode: SessionMode) => void;
   
   // 答辩主题
   topic: string;
@@ -51,7 +55,11 @@ interface SessionState {
   // 复盘报告
   report: ReportData | null;
   setReport: (report: ReportData) => void;
-  
+
+  // 汇报模式评价
+  reportModeReport: ReportModeData | null;
+  setReportModeReport: (report: ReportModeData) => void;
+
   // 重置全部状态
   resetAll: () => void;
 }
@@ -61,6 +69,9 @@ let timerInterval: ReturnType<typeof setInterval> | null = null;
 export const useSessionStore = create<SessionState>((set) => ({
   phase: 'idle',
   setPhase: (phase) => set({ phase }),
+
+  mode: 'defense',
+  setMode: (mode) => set({ mode }),
 
   topic: '',
   setTopic: (topic) => set({ topic }),
@@ -111,6 +122,9 @@ export const useSessionStore = create<SessionState>((set) => ({
   report: null,
   setReport: (report) => set({ report }),
 
+  reportModeReport: null,
+  setReportModeReport: (report) => set({ reportModeReport: report }),
+
   resetAll: () => {
     if (timerInterval) {
       clearInterval(timerInterval);
@@ -123,6 +137,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       isLoading: false,
       elapsedSeconds: 0,
       report: null,
+      reportModeReport: null,
       slides: [],
       currentSlide: 0,
       slideImages: [],

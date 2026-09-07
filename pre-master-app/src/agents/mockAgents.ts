@@ -1,4 +1,5 @@
-import { Agent, ChatMessage, ReportData } from './types';
+import { Agent, ChatMessage, ReportData, ReportModeData } from './types';
+import { Slide } from '../utils/pptParser';
 
 // 三个评委Agent定义
 export const agents: Record<string, Agent> = {
@@ -364,7 +365,6 @@ export function generateMockReport(messages: ChatMessage[], duration: string): R
     const nextUserMsg = messages.find(
       m => m.role === 'user' && m.timestamp > jMsg.timestamp
     );
-    const agent = Object.values(agents).find(a => a.id === jMsg.agentId);
     return {
       agentName: jMsg.agentName || '评委',
       question: jMsg.content,
@@ -395,5 +395,273 @@ export function generateMockReport(messages: ChatMessage[], duration: string): R
       '可以提前准备一些常见问题的标准回答',
     ],
     dialogueSummary,
+  };
+}
+
+// ===== 汇报模式评价（规则分析版）=====
+// 无 API 时的兜底：基于语音/文字转写内容做文本规则分析。
+// 三个维度：
+//  清晰度  - 填充词（嗯/啊/呃/就是说等）密度、句子冗长度、重复表达
+//  准确性  - 与答辩主题、PPT内容的字符二元组重合度（贴合度）
+//  连贯性  - 逻辑连接词 / 结构标记词的使用密度
+
+// 常见口语填充词 / 冗余表达
+const FILLER_PATTERNS = [
+  /嗯{1,3}/g, /啊{1,3}(?!哈)/g, /呃/g, /哦/g,
+  /就是说/g, /然后呢/g, /那个那个/g, /这个这个/g,
+  /怎么说呢/g, /你知道吧/g, /对吧/g, /对吧对吧/g,
+  /嗯嗯/g, /对对对/g, /所以说呢/g, /然后然后/g,
+  /反正就是/g, /就是就是/g,
+];
+// 逻辑连接词 / 结构标记词（体现连贯性）
+const CONNECTOR_WORDS = [
+  '首先', '其次', '然后', '最后', '首先呢', '接下来', '再来', '此外', '另外',
+  '因为', '所以', '因此', '于是', '从而', '综上', '总而言之', '总的来说',
+  '但是', '然而', '不过', '相反', '一方面', '另一方面', '举个例子', '例如',
+  '比如', '也就是说', '换句话说', '简单来说', '总的来说', '其实',
+];
+
+// 开场白标记（体现完整度）
+const OPENING_PATTERNS = [
+  /大家好/g, /各位老师/g, /各位评委/g, /尊敬的/g, /老师好/g, /同学们/g,
+  /今天.*(分享|汇报|介绍|展示)/g, /接下来.*(汇报|介绍|展示)/g,
+  /下面.*(汇报|介绍|展示)/g, /我的汇报/g, /本次汇报/g, /我来.*(介绍|分享|讲)/g,
+];
+
+// 结束语标记（体现完整度）
+const CLOSING_PATTERNS = [
+  /以上就是/g, /我的汇报/g, /汇报到此/g, /谢谢大家/g, /感谢.*聆听/g,
+  /请.*(指正|批评指正)/g, /敬请.*指正/g, /这就是我的/g, /讲完了/g, /完毕/g,
+];
+
+// 语言感染力标记：举例 / 数据引用 / 设问反问 / 互动引导
+const ENGAGEMENT_PATTERNS = [
+  /举个例子/g, /比如说/g, /例如/g, /比如/g, /具体来说/g, /我举/g,
+  /数据显示/g, /数据表明/g, /据统计/g, /根据.*数据/g, /达到\d/g, /占.*\d+/g,
+  /值得注意的是/g, /需要强调的是/g, /大家可以看到/g, /我们可以看到/g,
+  /请看/g, /试想/g, /不是吗/g, /难道/g, /是不是/g, /请问/g,
+  /正如.*所/g, /换句话说/g, /简单来说/g, /总而言之/g, /首先.*其次/g,
+];
+
+// 字符二元组集合（去标点空白），用于衡量两段文本的相似度
+function bigramSet(text: string): Set<string> {
+  const t = (text || '').replace(/[^0-9a-zA-Z一-鿿]/g, '');
+  const set = new Set<string>();
+  for (let i = 0; i + 1 < t.length; i++) set.add(t.slice(i, i + 2));
+  return set;
+}
+
+// 文本与参考内容的 Jaccard 相似度（0~1）
+function textRelevance(text: string, reference: string): number {
+  const t = (text || '').trim();
+  const ref = (reference || '').trim();
+  if (!t || !ref) return 0;
+  const a = bigramSet(t);
+  const b = bigramSet(ref);
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+// 统计文本中命中正则集合的次数
+function countMatches(text: string, patterns: RegExp[]): number {
+  let count = 0;
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) count += m.length;
+  }
+  return count;
+}
+
+// 平均句长（按中文句末标点切分）
+function avgSentenceLength(text: string): number {
+  const sentences = text.split(/[。！？!?；;\n]+/).map(s => s.trim()).filter(s => s.length > 0);
+  if (sentences.length === 0) return text.length;
+  return sentences.reduce((sum, s) => sum + s.length, 0) / sentences.length;
+}
+
+// 生成汇报模式评价（Mock / 规则兜底）
+// 五个维度：
+//  内容准确性  - 与答辩主题、PPT内容的字符二元组重合度（贴合度、跑题程度）
+//  内容完整度  - 开场-主体-收尾结构是否齐全、PPT关键要点覆盖、信息量是否充足
+//  逻辑连贯性  - 逻辑连接词 / 结构标记词的使用密度、前后呼应
+//  表达清晰度  - 填充词（嗯/啊/呃/就是说等）密度、句子冗长度、重复表达
+//  语言感染力  - 举例、数据引用、设问反问、互动引导
+export function generateMockReportModeReport(
+  reportText: string,
+  topic: string,
+  pptContent: string,
+  slides: Slide[],
+  duration: string
+): ReportModeData {
+  const text = (reportText || '').trim();
+  const totalMessages = 1;
+
+  // —— 无汇报内容：诚实告知，不做空洞评价 ——
+  if (!text) {
+    return {
+      overallScore: 0,
+      accuracyScore: 0,
+      completenessScore: 0,
+      coherenceScore: 0,
+      clarityScore: 0,
+      engagementScore: 0,
+      accuracyComment: '未检测到汇报内容，无法评估与主题的贴合度。',
+      completenessComment: '未检测到汇报内容，无法评估开场-主体-收尾结构。',
+      coherenceComment: '未检测到汇报内容，无法评估逻辑连贯性。',
+      clarityComment: '未检测到汇报语音内容，无法评估表达清晰度。',
+      engagementComment: '未检测到汇报内容，无法评估语言感染力。',
+      duration,
+      totalMessages,
+      summary: '本次汇报没有采集到发言内容（语音未识别或未开始说话）。请点击「再来一次」，使用麦克风或文字输入进行展示，即可获得表达评价。',
+      highlights: [],
+      improvements: ['尝试使用麦克风进行语音汇报，评价系统会基于你的发言内容分析五个维度的表达质量'],
+    };
+  }
+
+  // —— 基础统计 ——
+  const fillerCount = countMatches(text, FILLER_PATTERNS);
+  const avgLen = avgSentenceLength(text);
+  const openingCount = countMatches(text, OPENING_PATTERNS);
+  const closingCount = countMatches(text, CLOSING_PATTERNS);
+  const engagementCount = countMatches(text, ENGAGEMENT_PATTERNS);
+  const dataMentions = (text.match(/\d+/g) || []).length; // 数字引用（数据/年份/指标）
+  const connectorCount = CONNECTOR_WORDS.reduce((sum, w) => {
+    const re = new RegExp(w, 'g');
+    const m = text.match(re);
+    return sum + (m ? m.length : 0);
+  }, 0);
+  const connectorDensity = connectorCount / Math.max(1, Math.round(text.length / 100)); // 每百字
+
+  // —— 内容准确性：与主题 / PPT内容的贴合度（加权Jaccard） ——
+  const pptText = (pptContent || '') + ' ' + (slides || []).map(s => s.title || s.content || '').join(' ');
+  const topicRel = textRelevance(text, topic);
+  const pptRel = textRelevance(text, pptText);
+  // 有主题或PPT时按最高贴合度计；两者都无时给中性分
+  const hasReference = !!(topic?.trim() || pptText.trim());
+  const relevance = hasReference ? Math.max(topicRel, pptRel) : 0.5;
+  const accuracyScore = Math.max(30, Math.min(98, Math.round(50 + relevance * 45)));
+
+  // —— 内容完整度：开场/收尾 + PPT要点覆盖 + 文本量 ——
+  const slideTitles = (slides || []).map(s => s.title).filter(Boolean);
+  const coveredTitles = slideTitles.filter(t =>
+    text.includes(String(t)) || textRelevance(text, String(t)) >= 0.5
+  );
+  const coverRatio = slideTitles.length > 0 ? coveredTitles.length / slideTitles.length : 0;
+  const structureBonus = (openingCount > 0 ? 6 : 0) + (closingCount > 0 ? 6 : 0);
+  const lengthBonus = text.length >= 200 ? 6 : text.length >= 100 ? 3 : 0;
+  const completenessScore = Math.max(
+    30,
+    Math.min(98, Math.round(50 + coverRatio * 30 + structureBonus + lengthBonus))
+  );
+
+  // —— 逻辑连贯性：逻辑连接词密度 ——
+  const coherenceScore = Math.max(30, Math.min(98, Math.round(58 + Math.min(connectorDensity, 2) * 18)));
+
+  // —— 表达清晰度：填充词密度 + 句子冗长度 + 重复表达 ——
+  const fillerDensity = fillerCount / text.length;
+  // 填充词密度（每百字）与冗长程度各自折算扣分
+  const fillerPenalty = Math.min(30, Math.round(fillerDensity * 600));
+  const verbosityPenalty = avgLen > 45 ? Math.round((avgLen - 45) * 0.8) : 0;
+  const clarityScore = Math.max(30, Math.min(98, 88 - fillerPenalty - verbosityPenalty));
+
+  // —— 语言感染力：举例/数据/设问/互动标记密度 + 数字引用 ——
+  const engagementDensity = engagementCount / Math.max(1, Math.round(text.length / 100)); // 每百字
+  const engagementScore = Math.max(
+    30,
+    Math.min(
+      98,
+      Math.round(55 + Math.min(engagementDensity, 2.5) * 14 + Math.min(dataMentions, 6) * 1.5)
+    )
+  );
+
+  // 五维加权总分：准确性 0.25 / 完整度 0.2 / 连贯性 0.2 / 清晰度 0.2 / 感染力 0.15
+  const overallScore = Math.round(
+    accuracyScore * 0.25 +
+      completenessScore * 0.2 +
+      coherenceScore * 0.2 +
+      clarityScore * 0.2 +
+      engagementScore * 0.15
+  );
+
+  // —— 文字点评 ——
+  const accuracyComment = hasReference
+    ? relevance >= 0.25
+      ? '内容与主题/PPT高度贴合，核心概念交代清楚，几乎没有跑题。'
+      : relevance >= 0.12
+        ? '整体围绕主题展开，个别地方与PPT内容衔接不够紧密。'
+        : '与主题和PPT内容的贴合度偏低，建议紧扣主题关键词展开。'
+    : '未提供主题或PPT，准确性维度按中性基准评分（配置主题与PPT可获得更精准的贴合度评价）。';
+  const completenessComment =
+    slideTitles.length > 0 && coverRatio >= 0.6
+      ? '开场-主体-收尾结构完整，PPT各页要点覆盖充分。'
+      : slideTitles.length > 0 && coverRatio >= 0.3
+        ? '结构基本完整，但还有部分PPT要点未展开讲解。'
+        : slideTitles.length > 0
+          ? '大量PPT页面未被提及，汇报结构略显松散。'
+          : openingCount > 0 && closingCount > 0
+            ? '开场白与结束语齐全，汇报结构有头有尾。'
+            : openingCount > 0 || closingCount > 0
+              ? '有开场或收尾的意识，但另一侧有所缺失。'
+              : '缺少开场白与结束语，建议先做简要引入、结尾再总结收束。';
+  const coherenceComment =
+    connectorDensity >= 0.6
+      ? '逻辑连接词使用充分，结构层次清楚，前后内容衔接自然。'
+      : connectorDensity >= 0.3
+        ? '有一定结构意识，但可多用「首先/其次/最后」「因为/所以」等连接词强化逻辑主线。'
+        : '逻辑连接词偏少，内容组织偏碎片化，建议按「问题-方案-效果」或时间顺序展开。';
+  const clarityComment =
+    fillerCount === 0
+      ? '表达精炼，几乎没有口语填充词，句子节奏干脆利落。'
+      : avgLen > 45
+        ? `口语填充词出现${fillerCount}次（嗯/啊/就是说等），且单句偏长，建议拆分短句、减少停顿词。`
+        : `口语填充词出现${fillerCount}次，整体可接受，稍微留意「${fillerCount > 5 ? '嗯/啊' : '就是说'}」类停顿词即可。`;
+  const engagementComment =
+    engagementDensity >= 1.2
+      ? '善用举例、数据与互动式表达，语言富有感染力，能牢牢抓住听众。'
+      : engagementDensity >= 0.6
+        ? '有一定感染力，偶有举例和数据支撑，可再增加互动式提问。'
+        : dataMentions > 0
+          ? '内容偏陈述式，数据引用较少，可以多引入具体数字和案例。'
+          : '语言偏平淡，缺少举例、数据或设问，建议用故事与数据增强说服力。';
+
+  // —— 亮点 / 改进建议 ——
+  const highlights: string[] = [];
+  if (fillerCount === 0) highlights.push('表达流畅干净，全程无口语填充词');
+  if (relevance >= 0.25) highlights.push('紧扣主题与PPT内容，信息贴合度高');
+  if (openingCount > 0 && closingCount > 0) highlights.push('开场白与结束语齐全，汇报结构完整');
+  if (connectorDensity >= 0.6) highlights.push('逻辑连接词丰富，内容组织有条理');
+  if (engagementDensity >= 1.2) highlights.push('善用举例、数据与互动，语言富有感染力');
+  if (text.length >= 200) highlights.push('汇报内容充实，信息量充足');
+  if (highlights.length === 0) highlights.push('完成了一次完整的展示练习，迈出了关键一步');
+
+  const improvements: string[] = [];
+  if (fillerCount > 5) improvements.push(`口语填充词出现${fillerCount}次，建议放慢语速、以停顿替代「嗯/啊」`);
+  if (slideTitles.length > 0 && coverRatio < 0.3) improvements.push('对照PPT逐页过一遍要点，确保每页内容都有口头展开');
+  if (relevance < 0.12) improvements.push('汇报内容与主题/PPT贴合度低，建议围绕主题关键词组织内容');
+  if (connectorDensity < 0.3) improvements.push('多使用「首先/其次/最后」「因为/所以」等连接词强化逻辑');
+  if (openingCount === 0 || closingCount === 0) improvements.push(`${openingCount === 0 ? '加上开场白（问好并引出主题）' : '加上结束语（总结并致谢）'}`);
+  if (engagementDensity < 0.6) improvements.push('增加举例、数据引用或设问互动，让讲解更有感染力');
+  if (avgLen > 45) improvements.push(`平均句长${Math.round(avgLen)}字偏长，尝试拆分为更短的句子`);
+  if (improvements.length === 0) improvements.push('尝试脱稿练习，进一步缩短句子、增加与听众的互动');
+
+  return {
+    overallScore,
+    accuracyScore,
+    completenessScore,
+    coherenceScore,
+    clarityScore,
+    engagementScore,
+    accuracyComment,
+    completenessComment,
+    coherenceComment,
+    clarityComment,
+    engagementComment,
+    duration,
+    totalMessages,
+    summary: `本次展示共录制${text.length}字。表达方面${fillerCount === 0 ? '干净利落' : '仍有一些口语填充词'}，内容与主题的贴合度${relevance >= 0.25 ? '较高' : '有待加强'}，结构${openingCount > 0 && closingCount > 0 ? '完整' : '还可以更完整'}，整体${overallScore >= 80 ? '完成度很好，保持这个节奏即可' : overallScore >= 60 ? '完成度不错，针对建议微调后会更出彩' : '还有明显提升空间，按建议逐条改进'}。`,
+    highlights,
+    improvements,
   };
 }

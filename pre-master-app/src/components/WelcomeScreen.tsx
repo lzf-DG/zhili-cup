@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { parsePptx, slidesToText, Slide } from '../utils/pptParser';
+import { SessionMode } from '../agents/types';
 
 interface WelcomeScreenProps {
-  onStart: (topic: string, pptContent: string, slides: Slide[], slideImages: string[], pptFile: File | null) => void;
+  onStart: (mode: SessionMode, topic: string, pptContent: string, slides: Slide[], slideImages: string[], pptFile: File | null) => void;
   onOpenSettings: () => void;
 }
 
-// 水墨武侠风欢迎页 + 主题/PPT输入
+// 水墨武侠风欢迎页 + 模式选择 + 主题/PPT输入
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSettings }) => {
-  const [step, setStep] = useState<'intro' | 'setup'>('intro');
+  const [step, setStep] = useState<'intro' | 'mode' | 'setup'>('intro');
+  const [mode, setMode] = useState<SessionMode>('defense');
   const [topic, setTopic] = useState('');
   const [pptContent, setPptContent] = useState('');
   const [pptFileName, setPptFileName] = useState('');
@@ -19,6 +21,9 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
   const [parseError, setParseError] = useState('');
   const [slideImages, setSlideImages] = useState<string[]>([]);
   const [convertingPpt, setConvertingPpt] = useState(false);
+
+  // 汇报模式下的文案适配
+  const isReport = mode === 'report';
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -110,7 +115,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
 
   const handleStart = () => {
     if (topic.trim()) {
-      onStart(topic.trim(), pptContent, slides, slideImages, pptFile);
+      onStart(mode, topic.trim(), pptContent, slides, slideImages, pptFile);
     }
   };
 
@@ -213,7 +218,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={() => setStep('setup')}
+                onClick={() => setStep('mode')}
                 style={{
                   padding: '16px 56px',
                   fontSize: '18px',
@@ -252,17 +257,14 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
                 API 设置
               </motion.button>
             </motion.div>
-          ) : (
+          ) : step === 'mode' ? (
             <motion.div
-              key="setup"
+              key="mode"
               initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -30 }}
               transition={{ duration: 0.6 }}
-              style={{
-                width: '100%',
-                maxWidth: '440px',
-              }}
+              style={{ width: '100%', maxWidth: '580px' }}
             >
               {/* 返回按钮 */}
               <button
@@ -288,14 +290,136 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
                 letterSpacing: '4px',
                 textShadow: '0 2px 4px rgba(0,0,0,0.5)',
               }}>
-                设定论题
+                选择模式
+              </h2>
+              <p style={{
+                color: 'rgba(255,255,255,0.5)',
+                fontSize: '13px',
+                marginBottom: '22px',
+              }}>
+                选择一种练习方式，进入设定
+              </p>
+
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                {/* 答辩模式 */}
+                <motion.button
+                  whileHover={{ scale: 1.03, y: -4 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => { setMode('defense'); setStep('setup'); }}
+                  style={{
+                    flex: '1 1 240px',
+                    textAlign: 'left',
+                    padding: '22px 22px 24px',
+                    borderRadius: '16px',
+                    border: '1px solid rgba(255,213,79,0.35)',
+                    background: 'linear-gradient(150deg, rgba(0,0,0,0.55), rgba(40,20,0,0.35))',
+                    backdropFilter: 'blur(8px)',
+                    cursor: 'pointer',
+                    transition: 'all 0.25s ease',
+                  }}
+                >
+                  <div style={{ fontSize: '34px', marginBottom: '12px' }}>⚖️</div>
+                  <div style={{
+                    color: '#FFD54F',
+                    fontSize: '18px',
+                    fontWeight: 700,
+                    letterSpacing: '2px',
+                    marginBottom: '10px',
+                  }}>
+                    答辩模式
+                  </div>
+                  <p style={{
+                    color: 'rgba(255,255,255,0.65)',
+                    fontSize: '13px',
+                    lineHeight: 1.7,
+                    margin: 0,
+                  }}>
+                    模拟真实答辩现场：三位评委即时提问，逐轮问答锤炼临场应变与逻辑应对。
+                  </p>
+                </motion.button>
+
+                {/* 汇报模式 */}
+                <motion.button
+                  whileHover={{ scale: 1.03, y: -4 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => { setMode('report'); setStep('setup'); }}
+                  style={{
+                    flex: '1 1 240px',
+                    textAlign: 'left',
+                    padding: '22px 22px 24px',
+                    borderRadius: '16px',
+                    border: '1px solid rgba(76,175,80,0.4)',
+                    background: 'linear-gradient(150deg, rgba(0,0,0,0.55), rgba(0,30,10,0.35))',
+                    backdropFilter: 'blur(8px)',
+                    cursor: 'pointer',
+                    transition: 'all 0.25s ease',
+                  }}
+                >
+                  <div style={{ fontSize: '34px', marginBottom: '12px' }}>🎤</div>
+                  <div style={{
+                    color: '#81C784',
+                    fontSize: '18px',
+                    fontWeight: 700,
+                    letterSpacing: '2px',
+                    marginBottom: '10px',
+                  }}>
+                    汇报模式
+                  </div>
+                  <p style={{
+                    color: 'rgba(255,255,255,0.65)',
+                    fontSize: '13px',
+                    lineHeight: 1.7,
+                    margin: 0,
+                  }}>
+                    专注展示预演，无问答环节，适合通识课程、班级展示等汇报场合的排练。
+                  </p>
+                </motion.button>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="setup"
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -30 }}
+              transition={{ duration: 0.6 }}
+              style={{
+                width: '100%',
+                maxWidth: '440px',
+              }}
+            >
+              {/* 返回按钮 */}
+              <button
+                onClick={() => setStep('mode')}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'rgba(255,255,255,0.6)',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  marginBottom: '20px',
+                  padding: '4px 0',
+                }}
+              >
+                ← 返回
+              </button>
+
+              <h2 style={{
+                color: '#FFD54F',
+                fontSize: '24px',
+                fontWeight: 700,
+                marginBottom: '8px',
+                letterSpacing: '4px',
+                textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+              }}>
+                {isReport ? '设定汇报' : '设定论题'}
               </h2>
               <p style={{
                 color: 'rgba(255,255,255,0.5)',
                 fontSize: '13px',
                 marginBottom: '24px',
               }}>
-                输入你的答辩主题，上传PPT将投影至黑板
+                输入你的{isReport ? '汇报' : '答辩'}主题，上传PPT将投影至黑板
               </p>
 
               {/* 主题输入 */}
@@ -307,13 +431,13 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
                   marginBottom: '8px',
                   letterSpacing: '2px',
                 }}>
-                  答辩主题
+                  {isReport ? '汇报主题' : '答辩主题'}
                 </label>
                 <input
                   type="text"
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
-                  placeholder="例如：基于深度学习的图像识别研究"
+                  placeholder={isReport ? '例如：《中国近代史》第三章课堂展示' : '例如：基于深度学习的图像识别研究'}
                   style={{
                     width: '100%',
                     padding: '14px 18px',
@@ -402,17 +526,21 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStart, onOpenSet
                   fontWeight: 700,
                   color: topic.trim() ? '#1a1a2e' : 'rgba(255,255,255,0.3)',
                   background: topic.trim()
-                    ? 'linear-gradient(135deg, #FFD54F, #FF8F00)'
+                    ? (isReport
+                        ? 'linear-gradient(135deg, #81C784, #388E3C)'
+                        : 'linear-gradient(135deg, #FFD54F, #FF8F00)')
                     : 'rgba(255,255,255,0.1)',
                   border: 'none',
                   borderRadius: '14px',
                   cursor: topic.trim() ? 'pointer' : 'not-allowed',
-                  boxShadow: topic.trim() ? '0 8px 32px rgba(255,213,79,0.3)' : 'none',
+                  boxShadow: topic.trim()
+                    ? (isReport ? '0 8px 32px rgba(76,175,80,0.3)' : '0 8px 32px rgba(255,213,79,0.3)')
+                    : 'none',
                   letterSpacing: '4px',
                   transition: 'all 0.3s ease',
                 }}
               >
-                开 始 答 辩
+                {isReport ? '开 始 汇 报' : '开 始 答 辩'}
               </motion.button>
             </motion.div>
           )}

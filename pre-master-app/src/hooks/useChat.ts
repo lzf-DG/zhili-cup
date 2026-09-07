@@ -1,9 +1,9 @@
 import { useCallback } from 'react';
 import { useSessionStore } from '../store/sessionStore';
 import { selectNextAgent, getJudgeResponse, getAgentInfo, getOpeningMessage } from '../agents/agentManager';
-import { resetMockState, generateMockReport } from '../agents/mockAgents';
-import { callApi, generateReportViaApi, isApiConfigured } from '../agents/apiAgent';
-import { ChatMessage } from '../agents/types';
+import { resetMockState, generateMockReport, generateMockReportModeReport } from '../agents/mockAgents';
+import { callApi, generateReportViaApi, generateReportModeReportViaApi, isApiConfigured } from '../agents/apiAgent';
+import { ChatMessage, SessionMode } from '../agents/types';
 import { Slide } from '../utils/pptParser';
 
 // 秒数格式化为 mm:ss
@@ -32,10 +32,13 @@ export function useChat() {
     resetAll,
   } = useSessionStore();
 
-  // 开始新答辩会话（从汇报阶段开始：学生先汇报，评委按「结束汇报」后才反馈）
-  const startSession = useCallback((newTopic: string, newPptContent: string, newSlides: Slide[], newSlideImages: string[], newPptFile: File | null) => {
+  // 开始新会话（从汇报阶段开始：学生先汇报）
+  // - 答辩模式：王教授开场，「结束汇报」后进入评委问答
+  // - 汇报模式：无评委开场，「结束汇报」即结束本次预演（无问答环节）
+  const startSession = useCallback((mode: SessionMode, newTopic: string, newPptContent: string, newSlides: Slide[], newSlideImages: string[], newPptFile: File | null) => {
     resetAll();
     resetMockState();
+    useSessionStore.getState().setMode(mode);
     useSessionStore.getState().setTopic(newTopic);
     useSessionStore.getState().setPptContent(newPptContent);
     useSessionStore.getState().setSlides(newSlides);
@@ -44,19 +47,31 @@ export function useChat() {
     setPhase('reporting');
     startTimer();
 
-    // 发送开场白（注入答辩主题）
-    const opening = getOpeningMessage(newTopic);
-    const agent = getAgentInfo(opening.agentId);
-    const msg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      role: 'judge',
-      agentId: opening.agentId,
-      agentName: agent.name,
-      content: opening.content,
-      timestamp: Date.now(),
-    };
-    addMessage(msg);
-    setLastAgentId(opening.agentId);
+    const baseId = `msg-${Date.now()}`;
+    if (mode === 'defense') {
+      // 答辩模式：发送开场白（注入答辩主题）
+      const opening = getOpeningMessage(newTopic);
+      const agent = getAgentInfo(opening.agentId);
+      const msg: ChatMessage = {
+        id: baseId,
+        role: 'judge',
+        agentId: opening.agentId,
+        agentName: agent.name,
+        content: opening.content,
+        timestamp: Date.now(),
+      };
+      addMessage(msg);
+      setLastAgentId(opening.agentId);
+    } else {
+      // 汇报模式：无评委，给一条中性提示（居中展示）
+      const msg: ChatMessage = {
+        id: baseId,
+        role: 'system',
+        content: `汇报模式已就绪${newTopic.trim() ? ` · 「${newTopic.trim()}」` : ''}。请开始你的展示，本模式无问答环节，点击「结束汇报」即完成。`,
+        timestamp: Date.now(),
+      };
+      addMessage(msg);
+    }
   }, [resetAll, setPhase, startTimer, addMessage, setLastAgentId]);
 
   // 请求评委回复（共用路径：选择评委 → 优先API → Mock兜底 → 追加回复）
@@ -136,10 +151,49 @@ export function useChat() {
     await requestJudgeReply([...messages, userMsg], text.trim());
   }, [messages, isLoading, addMessage, requestJudgeReply]);
 
-  // 结束汇报：切换到答辩阶段，评委基于汇报内容先给出整体评价（王教授总评），再抛出第一个问题
+  // 结束汇报：
+  // - 答辩模式：切换到答辩（问答）阶段，评委基于汇报内容先给整体评价再提问
+  // - 汇报模式：无问答环节，结束汇报即结束本次预演，并生成表达质量评价
   const endReport = useCallback(async () => {
     const state = useSessionStore.getState();
     if (state.phase !== 'reporting' || state.isLoading) return;
+
+    // 汇报模式：无问答环节，结束汇报即结束本次预演
+    if (state.mode === 'report') {
+      stopTimer();
+      setPhase('finished');
+      const duration = formatDuration(state.elapsedSeconds);
+
+      // 汇总汇报内容（学生可能分多次发言）作为评价数据源
+      const reportText = state.messages
+        .filter((m) => m.role === 'user')
+        .map((m) => m.content)
+        .join('')
+        .trim();
+
+      // 优先使用真实API评价，失败则回退到Mock规则分析
+      if (isApiConfigured()) {
+        const apiReport = await generateReportModeReportViaApi(
+          reportText,
+          state.topic,
+          state.pptContent,
+          state.slides,
+          duration
+        );
+        if (apiReport) {
+          useSessionStore.getState().setReportModeReport(apiReport);
+          return;
+        }
+        console.warn('API汇报评价生成失败，回退到Mock规则分析');
+      }
+
+      useSessionStore.getState().setReportModeReport(
+        generateMockReportModeReport(reportText, state.topic, state.pptContent, state.slides, duration)
+      );
+      return;
+    }
+
+    // 答辩模式：切换到答辩阶段
     setPhase('presenting');
 
     // 汇总汇报内容（学生可能分多次发言）；无内容时评委直接开始提问
@@ -150,7 +204,7 @@ export function useChat() {
       .trim();
 
     await requestJudgeReply(state.messages, reportText, { isReportEvaluation: true });
-  }, [setPhase, requestJudgeReply]);
+  }, [setPhase, stopTimer, requestJudgeReply]);
 
   // 结束答辩，生成报告（API模式下先尝试真实AI评估，失败则回退Mock）
   const endSession = useCallback(async () => {

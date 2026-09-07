@@ -377,15 +377,51 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// POST /api/report - 生成复盘报告（代理转发到用户配置的第三方API）
+// POST /api/report - 生成复盘报告 / 汇报模式评价（代理转发到用户配置的第三方API）
 app.post('/api/report', async (req, res) => {
-  const { dialogueText, duration, apiConfig } = req.body;
+  const { mode, dialogueText, reportText, topic, pptContent, duration, apiConfig } = req.body;
 
   if (!apiConfig?.baseUrl || !apiConfig?.apiKey) {
     return res.status(503).json({ error: 'API未配置，请在设置中填写API信息' });
   }
 
-  const prompt = `请根据以下答辩模拟对话记录，生成一份结构化的复盘报告。
+  // 汇报模式：基于语音/文字转写内容分析表达质量（准确性/完整度/连贯性/清晰度/感染力）
+  const isReportMode = mode === 'report';
+
+  const prompt = isReportMode
+    ? `你是一位汇报表达评估专家。请根据以下学生汇报的转写文本，分析其表达质量。
+学生汇报主题：${topic || '（未提供）'}
+${pptContent ? `汇报所用PPT内容摘要：\n${pptContent.slice(0, 3000)}\n` : ''}
+学生汇报转写文本：
+${reportText}
+
+汇报时长：${duration}
+
+请从以下五个维度评估（每项0-100分）：
+1. 内容准确性（accuracyScore）：是否紧扣主题、与PPT内容贴合度、术语运用是否恰当、跑题程度
+2. 内容完整度（completenessScore）：开场-主体-收尾结构是否齐全、PPT各页要点是否覆盖、信息量是否充足
+3. 逻辑连贯性（coherenceScore）：逻辑连接词使用、结构层次、前后呼应
+4. 表达清晰度（clarityScore）：口语填充词（嗯/啊/呃/就是说等）密度、句子是否冗长、表述是否精炼
+5. 语言感染力（engagementScore）：是否善用举例、数据引用、设问反问、互动引导，语言是否有吸引力
+
+请以JSON格式返回（不要包含markdown代码块），字段如下：
+{
+  "overallScore": 0-100整数,
+  "accuracyScore": 0-100整数,
+  "completenessScore": 0-100整数,
+  "coherenceScore": 0-100整数,
+  "clarityScore": 0-100整数,
+  "engagementScore": 0-100整数,
+  "accuracyComment": "准确性点评（1-2句）",
+  "completenessComment": "完整度点评（1-2句）",
+  "coherenceComment": "连贯性点评（1-2句）",
+  "clarityComment": "清晰度点评（1-2句）",
+  "engagementComment": "感染力点评（1-2句）",
+  "summary": "总体评语（2-3句）",
+  "highlights": ["亮点1", "亮点2", "亮点3"],
+  "improvements": ["改进建议1", "改进建议2", "改进建议3"]
+}`
+    : `请根据以下答辩模拟对话记录，生成一份结构化的复盘报告。
 报告需要包含：
 1. 总体评分（0-100）
 2. 逻辑连贯性评分
@@ -416,7 +452,7 @@ ${dialogueText}
 }`;
 
   try {
-    console.log('[report] 调用第三方API生成复盘报告');
+    console.log(`[report] 调用第三方API生成${isReportMode ? '汇报模式评价' : '复盘报告'}`);
     const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -426,7 +462,7 @@ ${dialogueText}
       body: JSON.stringify({
         model: apiConfig.model || 'gpt-4o-mini',
         messages: [
-          { role: 'system', content: '你是一位答辩模拟评估专家，擅长分析学生的答辩表现并给出专业评价。' },
+          { role: 'system', content: isReportMode ? '你是一位汇报表达评估专家，擅长分析演讲与汇报的表达质量并给出专业评价。' : '你是一位答辩模拟评估专家，擅长分析学生的答辩表现并给出专业评价。' },
           { role: 'user', content: prompt },
         ],
         max_tokens: 1500,
